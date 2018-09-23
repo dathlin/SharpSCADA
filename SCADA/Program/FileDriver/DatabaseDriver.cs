@@ -46,7 +46,7 @@ namespace FileDriver
             }
         }
 
-        string _serverIP;
+        string _serverIP = ".";
         public string ServerName
         {
             get
@@ -97,28 +97,22 @@ namespace FileDriver
             get { return _server; }
         }
 
-        public DataBaseReader(IDataServer parent, short id, string name, string server = ".", int timeOut = 2, string databaseName = "SharpSCADA", string ins = null)
+        public DataBaseReader(IDataServer parent, short id, string name)
         {
             _id = id;
             _name = name;
             _server = parent;
-            _database = databaseName;
-            _serverIP = server;
-            _ins = ins;
-            _timeOut = timeOut / 1000;
-            SqlConnectionStringBuilder builder = new SqlConnectionStringBuilder();
-            builder.DataSource = (ins == null ? server : string.Format(@"{0}\{1}", _serverIP, _ins));
-            builder.InitialCatalog = _database;
-            builder.ConnectTimeout = _timeOut;
-            builder.IntegratedSecurity = true;
-            m_ConnStr = builder.ConnectionString;
         }
 
-        string m_ConnStr;
         SqlConnection m_Conn;
         public bool Connect()
         {
-            m_Conn = new SqlConnection(m_ConnStr);
+            SqlConnectionStringBuilder builder = new SqlConnectionStringBuilder();
+            builder.DataSource = (_ins == null ? _serverIP : string.Format(@"{0}\{1}", _serverIP, _ins));
+            builder.InitialCatalog = _database;
+            builder.ConnectTimeout = _timeOut;
+            builder.IntegratedSecurity = true;
+            m_Conn = new SqlConnection(builder.ConnectionString);
             //mySqlConnection.ConnectionTimeout = 1;//设置连接超时的时间,写在连接字符串内
             try
             {
@@ -129,8 +123,8 @@ namespace FileDriver
             }
             catch (Exception e)
             {
-                if (OnClose != null)
-                    OnClose(this, new ShutdownRequestEventArgs(e.Message));
+                if (OnError != null)
+                    OnError(this, new IOErrorEventArgs(e.Message));
                 return false;
             }
         }
@@ -174,8 +168,8 @@ namespace FileDriver
             }
             catch (Exception e)
             {
-                if (OnClose != null)
-                    OnClose(this, new ShutdownRequestEventArgs(e.Message));
+                if (OnError != null)
+                    OnError(this, new IOErrorEventArgs(e.Message));
                 return null;
             }
         }
@@ -202,8 +196,8 @@ namespace FileDriver
             catch (Exception e)
             {
                 m_Conn.Close();
-                if (OnClose != null)
-                    OnClose(this, new ShutdownRequestEventArgs(e.Message));
+                if (OnError != null)
+                    OnError(this, new IOErrorEventArgs(e.Message));
                 return -1;
             }
         }
@@ -243,6 +237,18 @@ namespace FileDriver
             }
             dataReader.Close();
             return data;
+        }
+
+        public ItemData<uint> ReadUInt32(DeviceAddress address)
+        {
+            var res = ReadInt32(address);
+            return new ItemData<uint>((uint)res.Value, res.TimeStamp, res.Quality);
+        }
+
+        public ItemData<ushort> ReadUInt16(DeviceAddress address)
+        {
+            var res = ReadInt16(address);
+            return new ItemData<ushort>((ushort)res.Value, res.TimeStamp, res.Quality);
         }
 
         public ItemData<short> ReadInt16(DeviceAddress address)
@@ -393,6 +399,20 @@ namespace FileDriver
                  new SqlParameter("@Value", SqlDbType.Variant) { Value = value });
         }
 
+        public int WriteUInt16(DeviceAddress address, ushort value)
+        {
+            return ExecuteStoredProcedure("UpdateValueByID",
+                 new SqlParameter("@ID", SqlDbType.SmallInt) { Value = address.CacheIndex },
+                 new SqlParameter("@Value", SqlDbType.Variant) { Value = value });
+        }
+
+        public int WriteUInt32(DeviceAddress address, uint value)
+        {
+            return ExecuteStoredProcedure("UpdateValueByID",
+                  new SqlParameter("@ID", SqlDbType.SmallInt) { Value = address.CacheIndex },
+                  new SqlParameter("@Value", SqlDbType.Variant) { Value = value });
+        }
+
         public int WriteInt32(DeviceAddress address, int value)
         {
             return ExecuteStoredProcedure("UpdateValueByID",
@@ -450,10 +470,14 @@ namespace FileDriver
                             itemArr[i].Value.Byte = dataReader.GetByte(0);
                             break;
                         case DataType.WORD:
+                            itemArr[i].Value.Word = (ushort)dataReader.GetInt16(0);
+                            break;
                         case DataType.SHORT:
                             itemArr[i].Value.Int16 = dataReader.GetInt16(0);
                             break;
-                        case DataType.TIME:
+                        case DataType.DWORD:
+                            itemArr[i].Value.DWord = (uint)dataReader.GetInt32(0);
+                            break;
                         case DataType.INT:
                             itemArr[i].Value.Int32 = dataReader.GetInt32(0);
                             break;
@@ -507,10 +531,14 @@ namespace FileDriver
                                     list[i].Value.Byte = Convert.ToByte(reader.GetValue(2));
                                     break;
                                 case DataType.WORD:
+                                    list[i].Value.Word = Convert.ToUInt16(reader.GetValue(2));
+                                    break;
                                 case DataType.SHORT:
                                     list[i].Value.Int16 = Convert.ToInt16(reader.GetValue(2));
                                     break;
-                                case DataType.TIME:
+                                case DataType.DWORD:
+                                    list[i].Value.DWord = Convert.ToUInt32(reader.GetValue(2));
+                                    break;
                                 case DataType.INT:
                                     list[i].Value.Int32 = Convert.ToInt32(reader.GetValue(2));
                                     break;
@@ -535,7 +563,7 @@ namespace FileDriver
             get { return 0x100; }
         }
 
-        public event ShutdownRequestEventHandler OnClose;
+        public event IOErrorEventHandler OnError;
 
     }
 }

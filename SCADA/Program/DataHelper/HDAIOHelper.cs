@@ -62,7 +62,7 @@ namespace DatabaseLib
 
         public static bool GetRangeFromDatabase(short? ID, ref DateTime start, ref DateTime end)
         {
-            using (SqlDataReader reader = DataHelper.ExecuteReader("SELECT MIN(TIMESTAMP),MAX(TIMESTAMP) FROM LOG_HDATA" + (ID.HasValue ? " WHERE ID=" + ID.Value : "")))
+            using (var reader = DataHelper.Instance.ExecuteReader("SELECT MIN(TIMESTAMP),MAX(TIMESTAMP) FROM LOG_HDATA" + (ID.HasValue ? " WHERE ID=" + ID.Value : "")))
             {
                 if (reader != null)
                 {
@@ -86,7 +86,7 @@ namespace DatabaseLib
             {
                 if (WriteToFile(date.AddDays(-1)) == 0)
                 {
-                    DataHelper.ExecuteNonQuery(string.Format("DELETE FROM LOG_HDATA WHERE [TIMESTAMP]<='{0}';", date.ToShortDateString()));
+                    DataHelper.Instance.ExecuteNonQuery(string.Format("DELETE FROM LOG_HDATA WHERE [TIMESTAMP]<='{0}';", date.ToShortDateString()));
                 }
             }
         }
@@ -104,8 +104,7 @@ namespace DatabaseLib
                     stream.Read(bits, 0, 8);//如果该位置指针为>0的正数，说明该区域已有数据
                     if (BitConverter.ToInt64(bits, 0) > 0) return -1;
                 }
-                using (SqlDataReader dataReader = DataHelper.ExecuteProcedureReader("WRITEHDATA",
-                  new SqlParameter("@DATE", SqlDbType.DateTime) { Value = date }))
+                using (var dataReader = DataHelper.Instance.ExecuteProcedureReader("WRITEHDATA", DataHelper.CreateParam("@DATE", SqlDbType.DateTime, date)))
                 {
                     if (dataReader == null) return -10;
                     else
@@ -160,7 +159,7 @@ namespace DatabaseLib
                                                 {
                                                     if (dataReader.Read())
                                                     {
-                                                        w.Write(dataReader.GetSqlDateTime(0).TimeTicks);
+                                                        w.Write(dataReader.GetTimeTick(0));
                                                         switch (list[i].Type)
                                                         {
                                                             case DataType.BOOL:
@@ -170,8 +169,13 @@ namespace DatabaseLib
                                                                 w.Write((byte)dataReader.GetFloat(1));
                                                                 break;
                                                             case DataType.WORD:
+                                                                w.Write((ushort)dataReader.GetFloat(1));
+                                                                break;
                                                             case DataType.SHORT:
                                                                 w.Write((short)dataReader.GetFloat(1));
+                                                                break;
+                                                            case DataType.DWORD:
+                                                                w.Write((uint)dataReader.GetFloat(1));
                                                                 break;
                                                             case DataType.INT:
                                                                 w.Write((int)dataReader.GetFloat(1));
@@ -306,9 +310,16 @@ namespace DatabaseLib
                                             pos++;
                                             break;
                                         case DataType.WORD:
+                                            data.Value.Word = acc.ReadUInt16(pos);
+                                            pos += 2;
+                                            break;
                                         case DataType.SHORT:
                                             data.Value.Int16 = acc.ReadInt16(pos);
                                             pos += 2;
+                                            break;
+                                        case DataType.DWORD:
+                                            data.Value.DWord = acc.ReadUInt32(pos);
+                                            pos += 4;
                                             break;
                                         case DataType.INT:
                                             data.Value.Int32 = acc.ReadInt32(pos);
@@ -417,9 +428,16 @@ namespace DatabaseLib
                                         pos++;
                                         break;
                                     case DataType.WORD:
+                                        data.Value.Word = acc2.ReadUInt16(pos);
+                                        pos += 2;
+                                        break;
                                     case DataType.SHORT:
                                         data.Value.Int16 = acc2.ReadInt16(pos);
                                         pos += 2;
+                                        break;
+                                    case DataType.DWORD:
+                                        data.Value.DWord = acc2.ReadUInt32(pos);
+                                        pos += 4;
                                         break;
                                     case DataType.INT:
                                         data.Value.Int32 = acc2.ReadInt32(pos);
@@ -442,10 +460,10 @@ namespace DatabaseLib
 
         public static IEnumerable<HistoryData> LoadFromDatabase(DateTime start, DateTime end, short? ID = null)
         {
-            using (SqlDataReader dataReader = DataHelper.ExecuteProcedureReader("READHDATA",
-              new SqlParameter("@STARTTIME", SqlDbType.DateTime) { Value = start },
-              new SqlParameter("@ENDTIME", SqlDbType.DateTime) { Value = end },
-              new SqlParameter("@ID", SqlDbType.Int) { Value = (object)ID ?? DBNull.Value }))
+            using (var dataReader = DataHelper.Instance.ExecuteProcedureReader("READHDATA",
+                DataHelper.CreateParam("@STARTTIME", SqlDbType.DateTime, start),
+                DataHelper.CreateParam("@ENDTIME", SqlDbType.DateTime, end),
+                DataHelper.CreateParam("@ID", SqlDbType.Int, (object)ID ?? DBNull.Value)))
             {
                 if (dataReader == null) yield break;
                 HistoryData data = HistoryData.Empty;
@@ -465,8 +483,13 @@ namespace DatabaseLib
                             data.Value.Byte = Convert.ToByte(dataReader.GetFloat(ivalue));
                             break;
                         case DataType.WORD:
+                            data.Value.Word = Convert.ToUInt16(dataReader.GetFloat(ivalue));
+                            break;
                         case DataType.SHORT:
                             data.Value.Int16 = Convert.ToInt16(dataReader.GetFloat(ivalue));
+                            break;
+                        case DataType.DWORD:
+                            data.Value.DWord = Convert.ToUInt32(dataReader.GetFloat(ivalue));
                             break;
                         case DataType.INT:
                             data.Value.Int32 = Convert.ToInt32(dataReader.GetFloat(ivalue));
@@ -492,7 +515,7 @@ namespace DatabaseLib
             {
                 sql.Append("'").Append(timeStamps[i]).Append("',");
             }
-            using (SqlDataReader dataReader = DataHelper.ExecuteReader(sql.Append("1)").ToString()))
+            using (var dataReader = DataHelper.Instance.ExecuteReader(sql.Append("1)").ToString()))
             {
                 if (dataReader == null) yield break;
                 HistoryData data = HistoryData.Empty;
@@ -512,8 +535,13 @@ namespace DatabaseLib
                             data.Value.Byte = Convert.ToByte(dataReader.GetFloat(ivalue));
                             break;
                         case DataType.WORD:
+                            data.Value.Word = Convert.ToUInt16(dataReader.GetFloat(ivalue));
+                            break;
                         case DataType.SHORT:
                             data.Value.Int16 = Convert.ToInt16(dataReader.GetFloat(ivalue));
+                            break;
+                        case DataType.DWORD:
+                            data.Value.DWord = Convert.ToUInt32(dataReader.GetFloat(ivalue));
                             break;
                         case DataType.INT:
                             data.Value.Int32 = Convert.ToInt32(dataReader.GetFloat(ivalue));

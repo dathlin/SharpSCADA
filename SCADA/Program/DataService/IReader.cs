@@ -6,7 +6,9 @@ namespace DataService
     public interface IReaderWriter
     {
         byte[] ReadBytes(DeviceAddress address, ushort size);
+        ItemData<uint> ReadUInt32(DeviceAddress address);
         ItemData<int> ReadInt32(DeviceAddress address);
+        ItemData<ushort> ReadUInt16(DeviceAddress address);
         ItemData<short> ReadInt16(DeviceAddress address);
         ItemData<byte> ReadByte(DeviceAddress address);
         ItemData<string> ReadString(DeviceAddress address, ushort size);
@@ -18,7 +20,9 @@ namespace DataService
         int WriteBit(DeviceAddress address, bool bit);
         int WriteBits(DeviceAddress address, byte bits);
         int WriteInt16(DeviceAddress address, short value);
+        int WriteUInt16(DeviceAddress address, ushort value);
         int WriteInt32(DeviceAddress address, int value);
+        int WriteUInt32(DeviceAddress address, uint value);
         int WriteFloat(DeviceAddress address, float value);
         int WriteString(DeviceAddress address, string str);
         int WriteValue(DeviceAddress address, object value);
@@ -52,7 +56,7 @@ namespace DataService
         bool Connect();
         IGroup AddGroup(string name, short id, int updateRate, float deadBand = 0f, bool active = false);
         bool RemoveGroup(IGroup group);
-        event ShutdownRequestEventHandler OnClose;
+        event IOErrorEventHandler OnError;
     }
 
     public interface IPLCDriver : IDriver, IReaderWriter
@@ -69,14 +73,14 @@ namespace DataService
         //bool RecieveData(string data);
     }
 
-    public class ShutdownRequestEventArgs : EventArgs
+    public class IOErrorEventArgs : EventArgs
     {
-        public ShutdownRequestEventArgs(string reson)
+        public IOErrorEventArgs(string reson)
         {
-            shutdownReason = reson;
+            Reason = reson;
         }
-        public string shutdownReason;
+        public string Reason;
     }
 
-    public delegate void ShutdownRequestEventHandler(object sender, ShutdownRequestEventArgs e);
+    public delegate void IOErrorEventHandler(object sender, IOErrorEventArgs e);
 }

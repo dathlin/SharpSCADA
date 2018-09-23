@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -19,36 +20,8 @@ using System.Xml;
 
 namespace BatchCoreService
 {
-    [ServiceContract(Namespace = "http://BatchCoreService")]
-    public interface IDataExchangeService
-    {
-        [OperationContract]
-        string Read(string id);
-
-        [OperationContract]
-        bool ReadExpression(string expression);
-
-        [OperationContract]
-        int Write(string id, string value);
-
-        [OperationContract]
-        Dictionary<string, string> BatchRead(string[] tags);
-
-        [OperationContract]
-        int BatchWrite(Dictionary<string, string> tags);
-
-        [OperationContract]
-        Stream LoadMetaData();
-
-        [OperationContract]
-        Stream LoadHdaBatch(DateTime start, DateTime end);
-
-        [OperationContract]
-        Stream LoadHdaSingle(DateTime start, DateTime end, short id);
-    }
-
     [ServiceBehavior(InstanceContextMode = InstanceContextMode.Single, Namespace = "http://BatchCoreService")]
-    public class DAService : IDataExchangeService, IDataServer, IAlarmServer
+    public class DAService : IDataServer, IAlarmServer
     {
         const int PORT = 6543;
 
@@ -138,6 +111,7 @@ namespace BatchCoreService
 
         bool _hasHda = false;
         List<HistoryData> _hda;
+        List<DriverArgumet> _arguments = new List<DriverArgumet>();
         Dictionary<short, ArchiveTime> _archiveTimes = new Dictionary<short, ArchiveTime>();
 
         Socket tcpServer = null;
@@ -186,7 +160,7 @@ namespace BatchCoreService
                         if (list != null && list.Count() > 0)
                         {
                             string sql = "SELECT TAGID,DESCRIPTION FROM META_TAG WHERE TAGID IN(" + string.Join(",", list) + ");";
-                            using (var reader = DataHelper.ExecuteReader(sql))
+                            using (var reader = DataHelper.Instance.ExecuteReader(sql))
                             {
                                 if (reader != null)
                                 {
@@ -270,7 +244,7 @@ namespace BatchCoreService
                     {
                         foreach (var driver in Drivers)
                         {
-                            driver.OnClose -= this.reader_OnClose;
+                            driver.OnError -= this.reader_OnClose;
                             driver.Dispose();
                         }
                         foreach (var condition in _conditionList)
@@ -397,7 +371,7 @@ namespace BatchCoreService
         {
             foreach (IDriver reader in _drivers.Values)
             {
-                reader.OnClose += new ShutdownRequestEventHandler(reader_OnClose);
+                reader.OnError += new IOErrorEventHandler(reader_OnClose);
                 if (reader.IsClosed)
                 {
                     //if (reader is IFileDriver)
@@ -415,14 +389,17 @@ namespace BatchCoreService
 
         void InitServerByDatabase()
         {
-            using (var dataReader = DataHelper.ExecuteProcedureReader("InitServer", new SqlParameter("@TYPE", SqlDbType.Int) { Value = 0 }))
+            using (var dataReader = DataHelper.Instance.ExecuteProcedureReader("InitServer", DataHelper.CreateParam("@TYPE", SqlDbType.Int, 0)))
             {
                 if (dataReader == null) return;// Stopwatch sw = Stopwatch.StartNew();
                 while (dataReader.Read())
                 {
-                    AddDriver(dataReader.GetInt16(0), dataReader.GetNullableString(1),
-                       dataReader.GetNullableString(2), dataReader.GetInt32(3), dataReader.GetNullableString(4), dataReader.GetNullableString(5),
-                        dataReader.GetNullableString(6), dataReader.GetNullableString(7));
+                    _arguments.Add(new DriverArgumet(dataReader.GetInt16(0), dataReader.GetNullableString(1), dataReader.GetNullableString(2)));
+                }
+                dataReader.NextResult();
+                while (dataReader.Read())
+                {
+                    AddDriver(dataReader.GetInt16(0), dataReader.GetNullableString(1), dataReader.GetNullableString(2),  dataReader.GetNullableString(3));
                 }
 
                 dataReader.NextResult();
@@ -817,10 +794,14 @@ namespace BatchCoreService
                                                     value.Byte = buffer[6];
                                                     break;
                                                 case DataType.WORD:
+                                                    value.Word = BitConverter.ToUInt16(buffer, 6);
+                                                    break;
                                                 case DataType.SHORT:
                                                     value.Int16 = BitConverter.ToInt16(buffer, 6);
                                                     break;
-                                                case DataType.TIME:
+                                                case DataType.DWORD:
+                                                    value.DWord = BitConverter.ToUInt32(buffer, 6);
+                                                    break;
                                                 case DataType.INT:
                                                     value.Int32 = BitConverter.ToInt32(buffer, 6);
                                                     break;
@@ -871,10 +852,14 @@ namespace BatchCoreService
                                                     values.Add(tag, buffer[j]);
                                                     break;
                                                 case DataType.WORD:
+                                                    values.Add(tag, BitConverter.ToUInt16(buffer, j));
+                                                    break;
                                                 case DataType.SHORT:
                                                     values.Add(tag, BitConverter.ToInt16(buffer, j));
                                                     break;
-                                                case DataType.TIME:
+                                                case DataType.DWORD:
+                                                    values.Add(tag, BitConverter.ToUInt32(buffer, j));
+                                                    break;
                                                 case DataType.INT:
                                                     values.Add(tag, BitConverter.ToInt32(buffer, j));
                                                     break;
@@ -1178,36 +1163,11 @@ namespace BatchCoreService
             lock (_hdaRoot)
             {
                 if (_hda.Count == 0) return;
-                //_array.CopyTo(data, 0);
-                SqlConnection m_Conn = new SqlConnection(DataHelper.ConnectString);
-                SqlTransaction sqlT = null;
-                try
+                if (DataHelper.Instance.BulkCopy(new HDASqlReader(_hda, this), "Log_HData",
+                      string.Format("DELETE FROM Log_HData WHERE [TIMESTAMP]>'{0}'", _hda[0].TimeStamp.ToString("yyyy/MM/dd HH:mm:ss"))))
                 {
-                    if (m_Conn.State == ConnectionState.Closed)
-                        m_Conn.Open();
-                    sqlT = m_Conn.BeginTransaction();
-                    SqlCommand cmd = new SqlCommand(string.Format("DELETE FROM Log_HData WHERE [TIMESTAMP]>'{0}'",
-                       _hda[0].TimeStamp.ToString()), m_Conn);
-                    cmd.Transaction = sqlT;
-                    cmd.ExecuteNonQuery();
-                    HDASqlReader reader = new HDASqlReader(_hda, this);
-                    SqlBulkCopy copy = new SqlBulkCopy(m_Conn, SqlBulkCopyOptions.Default, sqlT);
-                    copy.DestinationTableName = "Log_HData";
-                    copy.BulkCopyTimeout = 100000;
-                    //copy.BatchSize = _capacity;
-                    copy.WriteToServer(reader);
-                    //Clear();
-                    sqlT.Commit();
-                    m_Conn.Close();
                     _hda.Clear();
                     _hdastart = DateTime.Now;
-                }
-                catch (Exception e)
-                {
-                    if (sqlT != null)
-                        sqlT.Rollback();
-                    m_Conn.Close();
-                    DataHelper.AddErrorLog(e);
                 }
             }
         }
@@ -1216,35 +1176,8 @@ namespace BatchCoreService
         {
             var tempdata = _hda.ToArray();
             if (tempdata.Length == 0) return true;
-            SqlConnection m_Conn = new SqlConnection(DataHelper.ConnectString);
-            SqlTransaction sqlT = null;
-            try
-            {
-                if (m_Conn.State == ConnectionState.Closed)
-                    m_Conn.Open();
-                sqlT = m_Conn.BeginTransaction();
-                SqlCommand cmd = new SqlCommand(string.Format("DELETE FROM Log_HData WHERE [TIMESTAMP] BETWEEN '{0}' AND '{1}'",
-                   startTime, endTime), m_Conn);
-                cmd.Transaction = sqlT;
-                cmd.ExecuteNonQuery();
-                SqlBulkCopy copy = new SqlBulkCopy(m_Conn, SqlBulkCopyOptions.Default, sqlT);
-                copy.DestinationTableName = "Log_HData";
-                copy.BulkCopyTimeout = 100000;
-                //copy.BatchSize = _capacity;
-                copy.WriteToServer(new HDASqlReader(GetData(tempdata, startTime, endTime), this));
-                //Clear();
-                sqlT.Commit();
-                m_Conn.Close();
-                return true;
-            }
-            catch (Exception e)
-            {
-                if (sqlT != null)
-                    sqlT.Rollback();
-                m_Conn.Close();
-                DataHelper.AddErrorLog(e);
-                return false;
-            }
+            return DataHelper.Instance.BulkCopy(new HDASqlReader(GetData(tempdata, startTime, endTime), this), "Log_HData",
+                     string.Format("DELETE FROM Log_HData WHERE [TIMESTAMP] BETWEEN '{0}' AND '{1}'", startTime.ToString("yyyy/MM/dd HH:mm:ss"), endTime.ToString("yyyy/MM/dd HH:mm:ss")));
         }
 
         public void OnUpdate(object stateInfo)
@@ -1258,40 +1191,11 @@ namespace BatchCoreService
                     //Reverse(data);
                     DateTime start = _hda[0].TimeStamp;
                     //_array.CopyTo(data, 0);
-                    SqlConnection m_Conn = new SqlConnection(DataHelper.ConnectString);
-                    SqlTransaction sqlT = null;
-                    try
-                    {
-                        if (m_Conn.State == ConnectionState.Closed)
-                            m_Conn.Open();
-                        sqlT = m_Conn.BeginTransaction();
-                        SqlCommand cmd = new SqlCommand(string.Format("DELETE FROM Log_HData WHERE [TIMESTAMP]>'{0}'",
-                           start.ToString()), m_Conn);
-                        cmd.Transaction = sqlT;
-                        cmd.ExecuteNonQuery();
-                        HDASqlReader reader = new HDASqlReader(_hda, this);
-                        SqlBulkCopy copy = new SqlBulkCopy(m_Conn, SqlBulkCopyOptions.Default, sqlT);
-                        copy.DestinationTableName = "Log_HData";
-                        copy.BulkCopyTimeout = 100000;
-                        //copy.BatchSize = _capacity;
-                        copy.WriteToServer(reader);//如果写入失败，考虑不能无限增加线程数
-                        //Clear();
-                        sqlT.Commit();
-                        m_Conn.Close();
+                    if (DataHelper.Instance.BulkCopy(new HDASqlReader(_hda, this), "Log_HData",
+                    string.Format("DELETE FROM Log_HData WHERE [TIMESTAMP]>'{0}'", start.ToString("yyyy/MM/dd HH:mm:ss"))))
                         _hdastart = DateTime.Now;
-                    }
-                    catch (Exception e)
-                    {
-                        if (sqlT != null)
-                            sqlT.Rollback();
-                        m_Conn.Close();
-                        ThreadPool.UnsafeQueueUserWorkItem(new WaitCallback(this.SaveCachedData), _hda.ToArray());
-                        DataHelper.AddErrorLog(e);
-                    }
-                    finally
-                    {
-                        _hda.Clear();
-                    }
+                    else ThreadPool.UnsafeQueueUserWorkItem(new WaitCallback(this.SaveCachedData), _hda.ToArray());
+                    _hda.Clear();
                 }
             }
         }
@@ -1307,35 +1211,12 @@ namespace BatchCoreService
             while (true)
             {
                 if (count >= 5) return;
-                SqlConnection m_Conn = new SqlConnection(DataHelper.ConnectString);
-                SqlTransaction sqlT = null;
-                try
+                if (DataHelper.Instance.BulkCopy(new HDASqlReader(tempData, this), "Log_HData",
+                   string.Format("DELETE FROM Log_HData WHERE [TIMESTAMP] BETWEEN '{0}' AND '{1}'",
+                    startTime.ToString("yyyy/MM/dd HH:mm:ss"), endTime.ToString("yyyy/MM/dd HH:mm:ss"))))
                 {
-                    if (m_Conn.State == ConnectionState.Closed)
-                        m_Conn.Open();
-                    sqlT = m_Conn.BeginTransaction();
-                    SqlCommand cmd = new SqlCommand(string.Format("DELETE FROM Log_HData WHERE [TIMESTAMP] BETWEEN '{0}' AND '{1}'",
-                    startTime, endTime), m_Conn);
-                    cmd.Transaction = sqlT;
-                    cmd.ExecuteNonQuery();
-                    SqlBulkCopy copy = new SqlBulkCopy(m_Conn, SqlBulkCopyOptions.Default, sqlT);
-                    copy.DestinationTableName = "Log_HData";
-                    copy.BulkCopyTimeout = 100000;
-                    //copy.BatchSize = _capacity;
-                    copy.WriteToServer(new HDASqlReader(tempData, this));
-                    //Clear();
-                    sqlT.Commit();
-                    m_Conn.Close();
                     stateInfo = null;
                     _hdastart = DateTime.Now;
-                    return;
-                }
-                catch (Exception e)
-                {
-                    if (sqlT != null)
-                        sqlT.Rollback();
-                    m_Conn.Close();
-                    DataHelper.AddErrorLog(e);
                 }
                 count++;
                 Thread.Sleep(CYCLE2);
@@ -1361,10 +1242,10 @@ namespace BatchCoreService
         void OnValueChanged(object sender, ValueChangedEventArgs e)
         {
             var tag = sender as ITag;
-            DataHelper.ExecuteStoredProcedure("AddEventLog",
-                new SqlParameter("@StartTime", SqlDbType.DateTime) { SqlValue = tag.TimeStamp },
-                new SqlParameter("@Source", SqlDbType.NVarChar, 50) { SqlValue = tag.ID.ToString() },
-                new SqlParameter("@Comment", SqlDbType.NVarChar, 50) { SqlValue = tag.ToString() });
+            DataHelper.Instance.ExecuteStoredProcedure("AddEventLog",
+                DataHelper.CreateParam("@StartTime", SqlDbType.DateTime, tag.TimeStamp),
+                DataHelper.CreateParam("@Source", SqlDbType.NVarChar, tag.ID.ToString(), 50),
+                DataHelper.CreateParam("@Comment", SqlDbType.NVarChar, tag.ToString(), 50));
         }
 
         public HistoryData[] BatchRead(DataSource source, bool sync, params ITag[] itemArray)
@@ -1477,76 +1358,95 @@ namespace BatchCoreService
             sendBuffer[0] = FCTCOMMAND.fctHead;
             sendBuffer[1] = FCTCOMMAND.fctReadMultiple;
             //bytes[2] = 0;
-            int len = data.Count;
             short j = 5;
-            for (int i = 0; i < len; i++)
+            for (int i = 0; i < data.Count; i++)
             {
                 short id = data[i].ID;
-                byte[] dt = BitConverter.GetBytes(id);
-                sendBuffer[j++] = dt[0];
-                sendBuffer[j++] = dt[1];
-                switch (_list[GetItemProperties(id)].DataType)
+                var propid = GetItemProperties(id);
+                if (propid >= 0 && propid < _list.Count)
                 {
-                    case DataType.BOOL:
-                        sendBuffer[j++] = 1;
-                        sendBuffer[j++] = data[i].Value.Boolean ? (byte)1 : (byte)0;
-                        break;
-                    case DataType.BYTE:
-                        sendBuffer[j++] = 1;
-                        sendBuffer[j++] = data[i].Value.Byte;
-                        break;
-                    case DataType.WORD:
-                    case DataType.SHORT:
-                        {
-                            sendBuffer[j++] = 2;
-                            byte[] bt = BitConverter.GetBytes(data[i].Value.Int16);
-                            sendBuffer[j++] = bt[0];
-                            sendBuffer[j++] = bt[1];
-                        }
-                        break;
-                    case DataType.TIME:
-                    case DataType.INT:
-                        {
-                            sendBuffer[j++] = 4;
-                            byte[] bt = BitConverter.GetBytes(data[i].Value.Int32);
-                            sendBuffer[j++] = bt[0];
-                            sendBuffer[j++] = bt[1];
-                            sendBuffer[j++] = bt[2];
-                            sendBuffer[j++] = bt[3];
-                        }
-                        break;
-                    case DataType.FLOAT:
-                        {
-                            sendBuffer[j++] = 4;
-                            byte[] bt = BitConverter.GetBytes(data[i].Value.Single);
-                            sendBuffer[j++] = bt[0];
-                            sendBuffer[j++] = bt[1];
-                            sendBuffer[j++] = bt[2];
-                            sendBuffer[j++] = bt[3];
-                        }
-                        break;
-                    case DataType.STR:
-                        {
-                            byte[] bt = Encoding.ASCII.GetBytes(this[data[i].ID].ToString());
-                            sendBuffer[j++] = (byte)bt.Length;
-                            for (int k = 0; k < bt.Length; k++)
+                    byte[] dt = BitConverter.GetBytes(id);
+                    sendBuffer[j++] = dt[0];
+                    sendBuffer[j++] = dt[1];
+                    switch (_list[propid].DataType)
+                    {
+                        case DataType.BOOL:
+                            sendBuffer[j++] = 1;
+                            sendBuffer[j++] = data[i].Value.Boolean ? (byte)1 : (byte)0;
+                            break;
+                        case DataType.BYTE:
+                            sendBuffer[j++] = 1;
+                            sendBuffer[j++] = data[i].Value.Byte;
+                            break;
+                        case DataType.WORD:
                             {
-                                sendBuffer[j++] = bt[k];
+                                sendBuffer[j++] = 2;
+                                byte[] bt = BitConverter.GetBytes(data[i].Value.Word);
+                                sendBuffer[j++] = bt[0];
+                                sendBuffer[j++] = bt[1];
                             }
-                        }
-                        break;
-                    default:
-                        break;
+                            break;
+                        case DataType.SHORT:
+                            {
+                                sendBuffer[j++] = 2;
+                                byte[] bt = BitConverter.GetBytes(data[i].Value.Int16);
+                                sendBuffer[j++] = bt[0];
+                                sendBuffer[j++] = bt[1];
+                            }
+                            break;
+                        case DataType.DWORD:
+                            {
+                                sendBuffer[j++] = 4;
+                                byte[] bt = BitConverter.GetBytes(data[i].Value.DWord);
+                                sendBuffer[j++] = bt[0];
+                                sendBuffer[j++] = bt[1];
+                                sendBuffer[j++] = bt[2];
+                                sendBuffer[j++] = bt[3];
+                            }
+                            break;
+                        case DataType.INT:
+                            {
+                                sendBuffer[j++] = 4;
+                                byte[] bt = BitConverter.GetBytes(data[i].Value.Int32);
+                                sendBuffer[j++] = bt[0];
+                                sendBuffer[j++] = bt[1];
+                                sendBuffer[j++] = bt[2];
+                                sendBuffer[j++] = bt[3];
+                            }
+                            break;
+                        case DataType.FLOAT:
+                            {
+                                sendBuffer[j++] = 4;
+                                byte[] bt = BitConverter.GetBytes(data[i].Value.Single);
+                                sendBuffer[j++] = bt[0];
+                                sendBuffer[j++] = bt[1];
+                                sendBuffer[j++] = bt[2];
+                                sendBuffer[j++] = bt[3];
+                            }
+                            break;
+                        case DataType.STR:
+                            {
+                                byte[] bt = Encoding.ASCII.GetBytes(this[data[i].ID].ToString());
+                                sendBuffer[j++] = (byte)bt.Length;
+                                for (int k = 0; k < bt.Length; k++)
+                                {
+                                    sendBuffer[j++] = bt[k];
+                                }
+                            }
+                            break;
+                        default:
+                            break;
+                    }
+                    Array.Copy(BitConverter.GetBytes((data[i].TimeStamp == DateTime.MinValue ? DateTime.Now : data[i].TimeStamp).ToFileTime()), 0, sendBuffer, j, 8);
+                    j += 8;
                 }
-                Array.Copy(BitConverter.GetBytes((data[i].TimeStamp == DateTime.MinValue ? DateTime.Now : data[i].TimeStamp).ToFileTime()), 0, sendBuffer, j, 8);
-                j += 8;
             }
             byte[] dt1 = BitConverter.GetBytes(j);
             sendBuffer[3] = dt1[0];
             sendBuffer[4] = dt1[1];
             SocketError err;
             //bytes.CopyTo(bytes2, 0);
-            List<Socket> sockets = new List<Socket>(_socketThreadList.Count);
+            List<Socket> sockets = new List<Socket>();
             foreach (var socket in _socketThreadList)
             {
                 if (!socket.Key.Equals(tempdata.Address))
@@ -1573,8 +1473,7 @@ namespace BatchCoreService
             }
         }
 
-        public IDriver AddDriver(short id, string name, string server, int timeOut,
-            string assembly, string className, string spare1, string spare2)
+        public IDriver AddDriver(short id, string name, string assembly, string className)
         {
             if (_drivers.ContainsKey(id))
                 return _drivers[id];
@@ -1585,9 +1484,25 @@ namespace BatchCoreService
                 var dvType = ass.GetType(className);
                 if (dvType != null)
                 {
-                    dv = Activator.CreateInstance(dvType, new object[] { this, id, name, server, timeOut, spare1, spare2 }) as IDriver;
+                    dv = Activator.CreateInstance(dvType, new object[] { this, id, name }) as IDriver;
                     if (dv != null)
+                    {
+                        foreach (var arg in _arguments)
+                        {
+                            if (arg.DriverID == id)
+                            {
+                                var prop = dvType.GetProperty(arg.PropertyName);
+                                if (prop != null)
+                                {
+                                    if (prop.PropertyType.IsEnum)
+                                        prop.SetValue(dv, Enum.Parse(prop.PropertyType, arg.PropertyValue), null);
+                                    else
+                                        prop.SetValue(dv, Convert.ChangeType(arg.PropertyValue, prop.PropertyType, CultureInfo.CreateSpecificCulture("en-US")), null);
+                                }
+                            }
+                        }
                         _drivers.Add(id, dv);
+                    }
                 }
             }
             catch (Exception e)
@@ -1611,9 +1526,9 @@ namespace BatchCoreService
             }
         }
 
-        void reader_OnClose(object sender, ShutdownRequestEventArgs e)
+        void reader_OnClose(object sender, IOErrorEventArgs e)
         {
-            Log.WriteEntry(e.shutdownReason, EventLogEntryType.Error);
+            Log.WriteEntry(e.Reason, EventLogEntryType.Error);
             //AddErrorLog(new Exception(e.shutdownReason));
         }
 
@@ -1630,7 +1545,6 @@ namespace BatchCoreService
         {
             return _mapping.Remove(key.ToUpper());
         }
-
 
         object _alarmsync = new object();
 
@@ -1803,23 +1717,13 @@ namespace BatchCoreService
         private bool SaveAlarm()
         {
             if (_alarmList.Count == 0) return true;
-            try
+            if (DataHelper.Instance.BulkCopy(new AlarmDataReader(_alarmList), "Log_Alarm", null, SqlBulkCopyOptions.KeepIdentity))
             {
-                AlarmDataReader reader = new AlarmDataReader(_alarmList);
-                using (SqlBulkCopy bulk = new SqlBulkCopy(DataHelper.ConnectString, SqlBulkCopyOptions.KeepIdentity))
-                {
-                    bulk.DestinationTableName = "Log_Alarm";
-                    bulk.WriteToServer(reader);
-                }
                 _alarmList.Clear();
                 _alarmstart = DateTime.Now;
                 return true;
             }
-            catch (Exception e)
-            {
-                AddErrorLog(e);
-                return false;
-            }
+            return false;
         }
 
         public ICondition GetCondition(string tagName, AlarmType type)
@@ -1950,226 +1854,61 @@ namespace BatchCoreService
             }
             return 1;
         }
-        #endregion
-
-        #region DataExchange（数据交换服务器）
-        public Dictionary<string, string> BatchRead(string[] tags)
-        {
-            var itags = new List<ITag>(tags.Length);
-            for (int i = 0; i < tags.Length; i++)
-            {
-                var tag = this[tags[i]];
-                if (tag != null)
-                    itags.Add(tag);
-            }
-            var ds = new Dictionary<string, string>(tags.Length);
-            foreach (var tag in itags)
-            {
-                string obj;
-                if (tag.Address.VarType == DataType.FLOAT && Math.Abs(tag.Value.Single) < 5 * 10E-33)
-                {
-                    obj = "0";
-                }
-                else obj = tag.ToString();
-                ds.Add(tag.GetTagName(), obj ?? "");//此处大小写应注意与元数据表一致。
-            }
-            return ds;
-        }
-
-        public int BatchWrite(Dictionary<string, string> tags)
-        {
-            var dict = new Dictionary<string, object>();
-            foreach (var tag in tags)
-            {
-                dict.Add(tag.Key, tag.Value);
-            }
-            return BatchWrite(dict, true);
-        }
 
         public string Read(string id)
         {
-            var tag = this[id];
-            return tag == null ? string.Empty : tag.Address.VarType == DataType.BOOL ? tag.Value.Boolean ? "1" : "0" : tag.ToString();
+            throw new NotImplementedException();
+        }
+
+        public bool ReadExpression(string expression)
+        {
+            throw new NotImplementedException();
         }
 
         public int Write(string id, string value)
         {
-            var tag = this[id];
-            return tag == null ? -1 : tag.Write(value);
+            throw new NotImplementedException();
         }
 
-        Dictionary<string, Func<bool>> _exprdict = new Dictionary<string, Func<bool>>();
-
-        public bool ReadExpression(string expression)
+        public Dictionary<string, string> BatchRead(string[] tags)
         {
-            Func<bool> func;
-            if (_exprdict.TryGetValue(expression, out  func))
-            {
-                return func();
-            }
-            else
-            {
-                func = Eval.Eval(expression) as Func<bool>;
-                if (func != null)
-                {
-                    _exprdict[expression] = func;
-                    return func();
-                }
-                else return false;
-            }
+            throw new NotImplementedException();
+        }
+
+        public int BatchWrite(Dictionary<string, string> tags)
+        {
+            throw new NotImplementedException();
         }
 
         public Stream LoadMetaData()
         {
-            var stream = new MemoryStream();   //    var sb = new StringBuilder();
-            using (var writer = XmlTextWriter.Create(stream))
-            {
-                writer.WriteStartDocument();
-                writer.WriteStartElement("Sever");
-                foreach (var device in _drivers.Values)
-                {
-                    writer.WriteStartElement("Device");
-                    writer.WriteAttributeString("id", device.ID.ToString());
-                    writer.WriteAttributeString("name", device.Name);
-                    if (!string.IsNullOrEmpty(device.ServerName))
-                        writer.WriteAttributeString("server", device.ServerName);
-                    writer.WriteAttributeString("timeout", device.TimeOut.ToString());
-                    foreach (var grp in device.Groups)
-                    {
-                        writer.WriteStartElement("Group");
-                        writer.WriteAttributeString("id", grp.ID.ToString());
-                        writer.WriteAttributeString("name", grp.Name);
-                        writer.WriteAttributeString("deviceId", device.ID.ToString());
-                        writer.WriteAttributeString("updateRate", grp.UpdateRate.ToString());
-                        writer.WriteAttributeString("deadBand", grp.DeadBand.ToString());
-                        writer.WriteAttributeString("active", grp.IsActive.ToString());
-                        var list = _list.FindAll(x => x.GroupID == grp.ID);
-                        if (list != null && list.Count > 0)
-                        {
-                            foreach (var tag in list)
-                            {
-                                writer.WriteStartElement("Tag");
-                                writer.WriteAttributeString("id", tag.ID.ToString());
-                                writer.WriteAttributeString("groupid", tag.GroupID.ToString());
-                                writer.WriteAttributeString("name", tag.Name);
-                                writer.WriteAttributeString("address", tag.Address);
-                                writer.WriteAttributeString("datatype", ((byte)tag.DataType).ToString());
-                                writer.WriteAttributeString("size", tag.Size.ToString());
-                                writer.WriteAttributeString("archive", tag.Archive.ToString());
-                                writer.WriteAttributeString("min", tag.Minimum.ToString());
-                                writer.WriteAttributeString("max", tag.Maximum.ToString());
-                                writer.WriteAttributeString("cycle", tag.Cycle.ToString());
-                                writer.WriteEndElement();
-                            }
-
-                        }
-                        writer.WriteEndElement();
-                    }
-                    writer.WriteEndElement();
-                }
-                writer.WriteStartElement("Conditions");
-                foreach (var cond in _conditions)
-                {
-                    writer.WriteStartElement("Condition");
-                    writer.WriteAttributeString("id", cond.ID.ToString());
-                    writer.WriteAttributeString("alarmtype", ((int)cond.AlarmType).ToString());
-                    writer.WriteAttributeString("enabled", cond.IsEnabled.ToString());
-                    writer.WriteAttributeString("severity", ((int)cond.Severity).ToString());
-                    writer.WriteAttributeString("source", cond.Source);
-                    writer.WriteAttributeString("comment", cond.Comment);
-                    writer.WriteAttributeString("conditiontype", ((byte)cond.ConditionType).ToString());
-                    writer.WriteAttributeString("para", cond.Para.ToString());
-                    writer.WriteAttributeString("deadband", cond.DeadBand.ToString());
-                    writer.WriteAttributeString("delay", cond.Delay.ToString());
-                    foreach (var subcond in cond.SubConditions)
-                    {
-                        if (subcond.SubAlarmType != SubAlarmType.None)
-                        {
-                            writer.WriteStartElement("SubCondition");
-                            writer.WriteAttributeString("subalarmtype", ((int)subcond.SubAlarmType).ToString());
-                            writer.WriteAttributeString("enabled", subcond.IsEnabled.ToString());
-                            writer.WriteAttributeString("severity", ((int)subcond.Severity).ToString());
-                            writer.WriteAttributeString("threshold", subcond.Threshold.ToString());
-                            writer.WriteAttributeString("message", subcond.Message);
-                            writer.WriteEndElement();
-                        }
-                    }
-                    writer.WriteEndElement();
-                }
-                writer.WriteEndElement();
-                writer.WriteStartElement("Scales");
-                foreach (var scale in _scales)
-                {
-                    writer.WriteStartElement("Scale");
-                    writer.WriteAttributeString("id", scale.ID.ToString());
-                    writer.WriteAttributeString("scaletype", ((byte)scale.ScaleType).ToString());
-                    writer.WriteAttributeString("euhi", scale.EUHi.ToString());
-                    writer.WriteAttributeString("eulo", scale.EULo.ToString());
-                    writer.WriteAttributeString("rawhi", scale.RawHi.ToString());
-                    writer.WriteAttributeString("rawlo", scale.RawLo.ToString());
-                    writer.WriteEndElement();
-                }
-                writer.WriteEndElement();
-                if (ArchiveList != null)
-                {
-                    writer.WriteStartElement("ArchiveList");
-                    foreach (var archv in _archiveList)
-                    {
-                        writer.WriteStartElement("Archive");
-                        writer.WriteAttributeString("id", archv.Key.ToString());
-                        writer.WriteAttributeString("desp", archv.Value);
-                        writer.WriteEndElement();
-                    }
-                    writer.WriteEndElement();
-                }
-                writer.WriteEndElement();
-            }
-            stream.Position = 0L;
-            return stream;
+            throw new NotImplementedException();
         }
 
         public Stream LoadHdaBatch(DateTime start, DateTime end)
         {
-            List<byte> list = new List<byte>();
-            var result = GetHData(start, end);
-            short tempid = short.MinValue;
-            ITag tag = null;
-            byte[] idarray = new byte[2];
-            foreach (var data in result)
-            {
-                if (tempid != data.ID)
-                {
-                    tempid = data.ID;
-                    idarray = BitConverter.GetBytes(tempid);
-                    tag = this[tempid];
-                }
-                if (tag == null) continue;
-                list.AddRange(idarray);
-                list.AddRange(tag.ToByteArray(data.Value));
-                list.AddRange(BitConverter.GetBytes(data.TimeStamp.ToFileTime()));
-            }
-            list.AddRange(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                                    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF});
-            return new MemoryStream(list.ToArray());
+            throw new NotImplementedException();
         }
 
         public Stream LoadHdaSingle(DateTime start, DateTime end, short id)
         {
-            var tag = this[id];
-            if (tag == null) return new MemoryStream();
-            List<byte> list = new List<byte>();
-            var result = GetHData(start, end, id);
-            list.AddRange(BitConverter.GetBytes(id));
-            foreach (var data in result)
-            {
-                list.AddRange(tag.ToByteArray(data.Value));
-                list.AddRange(BitConverter.GetBytes(data.TimeStamp.ToFileTime()));
-            }
-            list.AddRange(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                                    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF});
-            return new MemoryStream(list.ToArray());
+            throw new NotImplementedException();
         }
         #endregion
+    }
+
+    class DriverArgumet
+    {
+        public short DriverID;
+        public string PropertyName;
+        public string PropertyValue;
+
+        public DriverArgumet(short id, string name, string value)
+        {
+            DriverID = id;
+            PropertyName = name;
+            PropertyValue = value;
+        }
     }
 
     class TempCachedData

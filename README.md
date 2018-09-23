@@ -43,7 +43,7 @@ SQLServer Express 2014/2008
 * 2.可运行可执行文件测试：
 Server端测试：在目录 ..\SCADA\Program\BatchCoreTest\bin\Debug下运行BatchCoreTest.exe
 Client端测试：在目录 ..\SCADA\Program\CoreTest\bin\Debug下运行CoreTest.exe
-请参考Document文件夹中的教程：《部署流程》和《设计流程》。
+请参考Document文件夹中的教程：《部署流程》和《设计流程》，如有问题可参考《FAQ》文档。
 
 Quick Start
 -------------
@@ -51,7 +51,7 @@ Quick Start
 * 2.修改配置文件并复制到C盘根目录下
 * 3.修改数据库内驱动程序的路径
 * 4.运行DEMO
-具体流程可参看Wiki。
+具体流程可参看《部署流程》。
 
 开发工具推荐
 -------------
@@ -63,14 +63,15 @@ Visual Studio/Blend：做为组态设计器，推荐VS2010，VS2015版本。
 
 * 已发布：
 内存数据库
-Modbus TCP/RTU
-OPC DA
-
+Modbus TCP/RTU、
+OPC DA、
+Siemens S300/200/1200/1500、
+Panasonic 、
+AB EtherNetIP、
+Omron UDP
 * 后续发布：
-DDE
-AB EtherNetIP
+DDE、
 Mitsubishi 
-Siemens S300/200/1200/1500
 
 文件目录
 -------------
@@ -89,6 +90,7 @@ server.xml为网关服务配置文件。
 如OPCDriver即为OPC 通讯组件。
 Dynamicdatadisplay：开源归档数据显示组件，http://dynamicdatadisplay.codeplex.com/
 WPFToolkit：WPF开源扩展工具包，http://wpftoolkit.codeplex.com
+libnodave：西门子驱动开源库(https://github.com/netdata/libnodave)
 
 * TagConfig目录[存放配置工具]：
 可方便配置驱动、组、变量、报警、量程等信息。支持导入导出。
@@ -110,11 +112,11 @@ ClientDriver、ModbusDriver、OPCDriver、FileDriver为各类通讯组件。
 
 计划：
 -------------
-支持.NET Core。
-实现更多的通讯接口：如欧姆龙、OPC UA等。
-更丰富的图元组件：如楼宇自控、化工等各行业。
-功能扩展：如进一步处理数据、过程控制等。
-安全性：安全性是重中之重，目前做的很不够。
+* 支持.NET Core。(目前已有测试版在CoreApp文件夹）
+* 实现更多的通讯接口：如欧姆龙、OPC UA等。
+* 更丰富的图元组件：如楼宇自控、化工等各行业。
+* 功能扩展：如进一步处理数据、过程控制等。
+* 安全性：安全性是重中之重，目前做的很不够。
 
 Showcase
 -------------
@@ -122,13 +124,18 @@ Showcase
 ![](https://github.com/GavinYellow/SharpSCADA/raw/master/Showcase/Receiving1.png)
 ![](https://github.com/GavinYellow/SharpSCADA/raw/master/Showcase/scada1.png)
 
-联系方式
--------------
-hijkl1999@yeah.net
-
 个人主页
 -------------
 http://www.cnblogs.com/evilcat/
+
+联系方式
+-------------
+hijkl1999@yeah.net
+QQ群：102486275
+
+贡献代码
+-------------
+[topmail](https://github.com/topmail),  [qwe7922142](https://github.com/qwe7922142),  [tonyshen277](https://github.com/tonyshen277),  [yangjingzhao123](https://github.com/yangjingzhao123), [xiebinghai](https://github.com/xiebinghai)
 
 License
 -------------

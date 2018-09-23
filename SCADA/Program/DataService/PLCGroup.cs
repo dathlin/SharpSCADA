@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Timers;
 
 namespace DataService
@@ -20,8 +21,7 @@ namespace DataService
                 _isActive = value;
                 if (value)
                 {
-                    //_timer.Start((uint)_updateRate, true);
-                    //_timer.Timer += new EventHandler(timer_Timer);
+                    if (_updateRate <= 0) _updateRate = 100;
                     _timer.Interval = _updateRate;
                     _timer.Elapsed += new ElapsedEventHandler(timer_Timer);
                     _timer.Start();
@@ -163,10 +163,14 @@ namespace DataService
                                 dataItem = new ByteTag(meta.ID, addr, this);
                                 break;
                             case DataType.WORD:
+                                dataItem = new UShortTag(meta.ID, addr, this);
+                                break;
                             case DataType.SHORT:
                                 dataItem = new ShortTag(meta.ID, addr, this);
                                 break;
-                            case DataType.TIME:
+                            case DataType.DWORD:
+                                dataItem = new UIntTag(meta.ID, addr, this);
+                                break;
                             case DataType.INT:
                                 dataItem = new IntTag(meta.ID, addr, this);
                                 break;
@@ -279,7 +283,11 @@ namespace DataService
                     _cacheReader.Size = cacheLength;
                 }
                 else
-                    _cacheReader.Size = _start.DataSize <= bitCount ? 1 : _start.DataSize / bitCount;//改变Cache的Size属性值将创建Cache的内存区域
+                {
+                    var size= _start.DataSize <= bitCount ? 1 : _start.DataSize / bitCount;
+                    _rangeList.Add(new PDUArea(_start, size, 0, 1));
+                    _cacheReader.Size = size;//改变Cache的Size属性值将创建Cache的内存区域
+                }
             }
         }
 
@@ -301,6 +309,7 @@ namespace DataService
             {
                 lock (sync)
                 {
+                    _changedList.Clear();
                     Poll();
                     if (_changedList.Count > 0)
                         Update();
@@ -310,9 +319,9 @@ namespace DataService
                 return;
         }
 
-        protected virtual int Poll()
+        protected virtual void Poll()
         {
-            if (_plcReader.IsClosed) return -1;
+            if (_plcReader.IsClosed) return;
             byte[] cache = (byte[])_cacheReader.Cache;
             int offset = 0;
             foreach (PDUArea area in _rangeList)
@@ -321,7 +330,7 @@ namespace DataService
                 if (rcvBytes == null)
                 {
                     //_plcReader.Connect();
-                    return -1;
+                    continue;
                 }
                 else
                 {
@@ -360,7 +369,7 @@ namespace DataService
                             ushort size = addr.DataSize;
                             for (int i = 0; i < size; i++)
                             {
-                                if (rcvBytes[iByte1 + i] != cache[iByte + i])
+                                if (iByte1 + i < rcvBytes.Length && rcvBytes[iByte1 + i] != cache[iByte + i])
                                 {
                                     _changedList.Add(index);
                                     break;
@@ -374,7 +383,6 @@ namespace DataService
                 }
                 offset += rcvBytes.Length;
             }
-            return 1;
         }
 
         protected void Update()
@@ -414,7 +422,6 @@ namespace DataService
                         item.Update(item.Read(), dt, QUALITIES.QUALITY_GOOD);
                 }
             }
-            _changedList.Clear();
         }
 
         public void Dispose()
@@ -521,6 +528,16 @@ namespace DataService
             return source == DataSource.Cache ? _cacheReader.ReadInt32(address) : _plcReader.ReadInt32(address);
         }
 
+        public ItemData<uint> ReadUInt32(DeviceAddress address, DataSource source = DataSource.Cache)
+        {
+            return source == DataSource.Cache ? _cacheReader.ReadUInt32(address) : _plcReader.ReadUInt32(address);
+        }
+
+        public ItemData<ushort> ReadUInt16(DeviceAddress address, DataSource source = DataSource.Cache)
+        {
+            return source == DataSource.Cache ? _cacheReader.ReadUInt16(address) : _plcReader.ReadUInt16(address);
+        }
+
         public ItemData<short> ReadInt16(DeviceAddress address, DataSource source = DataSource.Cache)
         {
             return source == DataSource.Cache ? _cacheReader.ReadInt16(address) : _plcReader.ReadInt16(address);
@@ -560,6 +577,42 @@ namespace DataService
                         DataChange(this, new DataChangeEventArgs(1, new HistoryData[1]
                 {
                     new HistoryData(tag.ID,QUALITIES.QUALITY_GOOD,new Storage{Int32=value}, DateTime.Now)
+                }));
+                }
+            }
+            return rs;
+        }
+
+        public int WriteUInt32(DeviceAddress address, uint value)
+        {
+            int rs = _plcReader.WriteUInt32(address, value);
+            if (rs >= 0)
+            {
+                if (DataChange != null)
+                {
+                    ITag tag = GetTagByAddress(address);
+                    if (tag != null)
+                        DataChange(this, new DataChangeEventArgs(1, new HistoryData[1]
+                {
+                    new HistoryData(tag.ID,QUALITIES.QUALITY_GOOD,new Storage{DWord=value}, DateTime.Now)
+                }));
+                }
+            }
+            return rs;
+        }
+
+        public int WriteUInt16(DeviceAddress address, ushort value)
+        {
+            int rs = _plcReader.WriteUInt16(address, value);
+            if (rs >= 0)
+            {
+                if (DataChange != null)
+                {
+                    ITag tag = GetTagByAddress(address);
+                    if (tag != null)
+                        DataChange(this, new DataChangeEventArgs(1, new HistoryData[1]
+                {
+                    new HistoryData(tag.ID,QUALITIES.QUALITY_GOOD,new Storage{Word=value}, DateTime.Now)
                 }));
                 }
             }
@@ -680,5 +733,287 @@ namespace DataService
             StartIndex = startIndex;
             Count = count;
         }
+    }
+
+    public sealed class NetBytePLCGroup : PLCGroup
+    {
+        public NetBytePLCGroup(short id, string name, int updateRate, bool active, IPLCDriver plcReader)
+        {
+            this._id = id;
+            this._name = name;
+            this._updateRate = updateRate;
+            this._isActive = active;
+            this._plcReader = plcReader;
+            this._server = _plcReader.Parent;
+            this._timer = new Timer();
+            this._changedList = new List<int>();
+            this._cacheReader = new NetByteCacheReader();
+        }
+
+        protected override void Poll()
+        {
+            if (_items == null || _items.Count == 0) return;
+            byte[] cache = (byte[])_cacheReader.Cache;
+            int offset = 0;
+            foreach (PDUArea area in _rangeList)
+            {
+                byte[] rcvBytes = _plcReader.ReadBytes(area.Start, (ushort)area.Len);//从PLC读取数据                
+                if (rcvBytes == null)
+                {
+                    //_plcReader.Connect();
+                    continue;
+                }
+                else
+                {
+                    int index = area.StartIndex;//index指向_items中的Tag元数据
+                    int count = index + area.Count;
+                    while (index < count)
+                    {
+                        DeviceAddress addr = _items[index].Address;
+                        int iByte = addr.CacheIndex;
+                        int iByte1 = iByte - offset;
+                        if (addr.VarType == DataType.BOOL)
+                        {
+                            int tmp = rcvBytes[iByte1] ^ cache[iByte];
+                            DeviceAddress next = addr;
+                            if (tmp != 0)
+                            {
+                                while (addr.Start == next.Start)
+                                {
+                                    if ((tmp & (1 << next.Bit)) > 0) _changedList.Add(index);
+                                    if (++index < count)
+                                        next = _items[index].Address;
+                                    else
+                                        break;
+                                }
+                            }
+                            else
+                            {
+                                while (addr.Start == next.Start && ++index < count)
+                                {
+                                    next = _items[index].Address;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            ushort size = addr.DataSize;
+                            for (int i = 0; i < size; i++)
+                            {
+                                if (iByte1 + i < rcvBytes.Length && rcvBytes[iByte1 + i] != cache[iByte + i])
+                                {
+                                    _changedList.Add(index);
+                                    break;
+                                }
+                            }
+                            index++;
+                        }
+                    }
+                    for (int j = 0; j < rcvBytes.Length; j++)
+                        cache[j + offset] = rcvBytes[j];//将PLC读取的数据写入到CacheReader中
+                }
+                offset += rcvBytes.Length;
+            }
+        }
+    }
+
+    public sealed class NetShortGroup : PLCGroup
+    {
+        public NetShortGroup(short id, string name, int updateRate, bool active, IPLCDriver plcReader)
+        {
+            this._id = id;
+            this._name = name;
+            this._updateRate = updateRate;
+            this._isActive = active;
+            this._plcReader = plcReader;
+            this._server = _plcReader.Parent;
+            this._timer = new Timer();
+            this._changedList = new List<int>();
+            this._cacheReader = new NetShortCacheReader();
+        }
+
+        protected override unsafe void Poll()
+        {
+            short[] cache = (short[])_cacheReader.Cache;
+            int offset = 0;
+            foreach (PDUArea area in _rangeList)
+            {
+                byte[] rcvBytes = _plcReader.ReadBytes(area.Start, (ushort)area.Len);//从PLC读取数据  
+                if (rcvBytes == null || rcvBytes.Length == 0)
+                {
+                    offset += (area.Len + 1) / 2;
+                    //_plcReader.Connect();
+                    continue;
+                }
+                else
+                {
+                    int len = rcvBytes.Length / 2;
+                    fixed (byte* p1 = rcvBytes)
+                    {
+                        short* prcv = (short*)p1;
+                        int index = area.StartIndex;//index指向_items中的Tag元数据
+                        int count = index + area.Count;
+                        while (index < count)
+                        {
+                            DeviceAddress addr = _items[index].Address;
+                            int iShort = addr.CacheIndex;
+                            int iShort1 = iShort - offset;
+                            if (addr.VarType == DataType.BOOL)
+                            {
+                                if (addr.ByteOrder.HasFlag(ByteOrder.Network)) prcv[iShort1] = IPAddress.HostToNetworkOrder(prcv[iShort1]);
+                                int tmp = prcv[iShort1] ^ cache[iShort];
+                                DeviceAddress next = addr;
+                                if (tmp != 0)
+                                {
+                                    while (addr.Start == next.Start)
+                                    {
+                                        if ((tmp & (1 << next.Bit)) > 0) _changedList.Add(index);
+                                        if (++index < count)
+                                            next = _items[index].Address;
+                                        else
+                                            break;
+                                    }
+                                }
+                                else
+                                {
+                                    while (addr.Start == next.Start && ++index < count)
+                                    {
+                                        next = _items[index].Address;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                if (addr.DataSize <= 2)
+                                {
+                                    if (prcv[iShort1] != cache[iShort]) _changedList.Add(index);
+                                }
+                                else
+                                {
+                                    int size = addr.DataSize / 2;
+                                    for (int i = 0; i < size; i++)
+                                    {
+                                        if (prcv[iShort1 + i] != cache[iShort + i])
+                                        {
+                                            _changedList.Add(index);
+                                            break;
+                                        }
+                                    }
+                                }
+                                index++;
+                            }
+                        }
+                        for (int j = 0; j < len; j++)
+                        {
+                            cache[j + offset] = prcv[j];
+                        }//将PLC读取的数据写入到CacheReader中
+                    }
+                    offset += len;
+                }
+            }
+        }
+    }
+
+    public sealed class ShortGroup : PLCGroup
+    {
+        public ShortGroup(short id, string name, int updateRate, bool active, IPLCDriver plcReader)
+        {
+            this._id = id;
+            this._name = name;
+            this._updateRate = updateRate;
+            this._isActive = active;
+            this._plcReader = plcReader;
+            this._server = _plcReader.Parent;
+            this._timer = new Timer();
+            this._changedList = new List<int>();
+            this._cacheReader = new ShortCacheReader();
+        }
+
+        protected override unsafe void Poll()
+        {
+            short[] cache = (short[])_cacheReader.Cache;
+            int k = 0;
+            foreach (PDUArea area in _rangeList)
+            {
+                byte[] rcvBytes = _plcReader.ReadBytes(area.Start, (ushort)area.Len);//从PLC读取数据  
+                if (rcvBytes == null)
+                {
+                    k += (area.Len + 1) / 2;
+                    continue;
+                }
+                else
+                {
+                    int len = rcvBytes.Length / 2;
+                    fixed (byte* p1 = rcvBytes)
+                    {
+                        short* prcv = (short*)p1;
+                        int index = area.StartIndex;//index指向_items中的Tag元数据
+                        int count = index + area.Count;
+                        while (index < count)
+                        {
+                            DeviceAddress addr = _items[index].Address;
+                            int iShort = addr.CacheIndex;
+                            int iShort1 = iShort - k;
+                            if (addr.VarType == DataType.BOOL)
+                            {
+                                int tmp = prcv[iShort1] ^ cache[iShort];
+                                DeviceAddress next = addr;
+                                if (tmp != 0)
+                                {
+                                    while (addr.Start == next.Start)
+                                    {
+                                        if ((tmp & (1 << next.Bit)) > 0) _changedList.Add(index);
+                                        if (++index < count)
+                                            next = _items[index].Address;
+                                        else
+                                            break;
+                                    }
+                                }
+                                else
+                                {
+                                    while (addr.Start == next.Start && ++index < count)
+                                    {
+                                        next = _items[index].Address;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                if (addr.ByteOrder.HasFlag(ByteOrder.BigEndian))
+                                {
+                                    for (int i = 0; i < addr.DataSize / 2; i++)
+                                    {
+                                        prcv[iShort1 + i] = IPAddress.HostToNetworkOrder(prcv[iShort1 + i]);
+                                    }
+                                }
+                                if (addr.DataSize <= 2)
+                                {
+                                    if (prcv[iShort1] != cache[iShort]) _changedList.Add(index);
+                                }
+                                else
+                                {
+                                    int size = addr.DataSize / 2;
+                                    for (int i = 0; i < size; i++)
+                                    {
+                                        if (prcv[iShort1 + i] != cache[iShort + i])
+                                        {
+                                            _changedList.Add(index);
+                                            break;
+                                        }
+                                    }
+                                }
+                                index++;
+                            }
+                        }
+                        for (int j = 0; j < len; j++)
+                        {
+                            cache[j + k] = prcv[j];
+                        }//将PLC读取的数据写入到CacheReader中
+                    }
+                    k += len;
+                }
+            }
+        }
+
     }
 }

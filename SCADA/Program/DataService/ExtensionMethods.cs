@@ -1,61 +1,12 @@
 ﻿using System;
-using System.Text;
-using System.Net;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.Data.SqlClient;
+using System.Net;
+using System.Text;
 
 namespace DataService
 {
     public static class ExtMethods
     {
-        public static bool ModifyItemType(this ITag tag, VarEnum dataType)
-        {
-            DeviceAddress addr = tag.Address;
-            switch (dataType)
-            {
-                case VarEnum.VT_BOOL:
-                    if (addr.VarType == DataType.BYTE || addr.VarType == DataType.SHORT || addr.VarType == DataType.INT || addr.VarType == DataType.FLOAT)
-                    {
-                        tag.Address = new DeviceAddress(addr.Area, addr.DBNumber, addr.CacheIndex, addr.Start, 1, 0, DataType.BOOL);
-                        return true;
-                    }
-                    return false;
-                case VarEnum.VT_UI1:
-                    if (addr.VarType == DataType.BOOL || addr.VarType == DataType.SHORT || addr.VarType == DataType.INT || addr.VarType == DataType.FLOAT)
-                    {
-                        tag.Address = new DeviceAddress(addr.Area, addr.DBNumber, addr.CacheIndex, addr.Start, 1, 0, DataType.BYTE);
-                        return true;
-                    }
-                    return false;
-                case VarEnum.VT_UI2:
-                case VarEnum.VT_I2:
-                    if (addr.VarType == DataType.BYTE || addr.VarType == DataType.BOOL || addr.VarType == DataType.INT || addr.VarType == DataType.FLOAT)
-                    {
-                        tag.Address = new DeviceAddress(addr.Area, addr.DBNumber, addr.CacheIndex, addr.Start, 2, 0, DataType.SHORT);
-                        return true;
-                    }
-                    return false;
-                case VarEnum.VT_UI4:
-                case VarEnum.VT_I4:
-                    if (addr.VarType == DataType.BYTE || addr.VarType == DataType.SHORT || addr.VarType == DataType.BOOL || addr.VarType == DataType.FLOAT)
-                    {
-                        tag.Address = new DeviceAddress(addr.Area, addr.DBNumber, addr.CacheIndex, addr.Start, 4, 0, DataType.INT);
-                        return true;
-                    }
-                    return false;
-                case VarEnum.VT_R4:
-                    if (addr.VarType == DataType.BYTE || addr.VarType == DataType.SHORT || addr.VarType == DataType.BOOL || addr.VarType == DataType.INT)
-                    {
-                        tag.Address = new DeviceAddress(addr.Area, addr.DBNumber, addr.CacheIndex, addr.Start, 4, 0, DataType.FLOAT);
-                        return true;
-                    }
-                    return false;
-                default:
-                    return false;
-            }
-        }
-
         public static string GetExceptionMsg(this Exception e)
         {
             string err = string.Empty;
@@ -67,18 +18,6 @@ namespace DataService
             }
             err += string.Format("\n {0}", e.StackTrace);
             return err;
-        }
-
-        public static string GetNullableString(this SqlDataReader dataReader, int index)
-        {
-            var svr = dataReader.GetSqlString(index);
-            return svr.IsNull ? null : svr.Value;
-        }
-
-        public static DateTime? GetNullableTime(this SqlDataReader dataReader, int index)
-        {
-            var svr = dataReader.GetSqlDateTime(index);
-            return svr.IsNull ? default(Nullable<DateTime>) : svr.Value;
         }
 
         public static bool ModifyItemName(this ITag tag, string name)
@@ -176,10 +115,14 @@ namespace DataService
                     var bt = reader.ReadByte(address);
                     return new ItemData<object>(bt.Value, bt.TimeStamp, bt.Quality);
                 case DataType.WORD:
+                    var ush = reader.ReadUInt16(address);
+                    return new ItemData<object>(ush.Value, ush.TimeStamp, ush.Quality);
                 case DataType.SHORT:
                     var sh = reader.ReadInt16(address);
                     return new ItemData<object>(sh.Value, sh.TimeStamp, sh.Quality);
-                case DataType.TIME:
+                case DataType.DWORD:
+                    var dw = reader.ReadUInt32(address);
+                    return new ItemData<object>(dw.Value, dw.TimeStamp, dw.Quality);
                 case DataType.INT:
                     var it = reader.ReadInt32(address);
                     return new ItemData<object>(it.Value, it.TimeStamp, it.Quality);
@@ -202,9 +145,11 @@ namespace DataService
                 case DataType.BYTE:
                     return writer.WriteBits(address, Convert.ToByte(value));
                 case DataType.WORD:
+                    return writer.WriteUInt16(address, Convert.ToUInt16(value));
                 case DataType.SHORT:
                     return writer.WriteInt16(address, Convert.ToInt16(value));
-                case DataType.TIME:
+                case DataType.DWORD:
+                    return writer.WriteUInt32(address, Convert.ToUInt32(value));
                 case DataType.INT:
                     return writer.WriteInt32(address, Convert.ToInt32(value));
                 case DataType.FLOAT:
@@ -328,10 +273,14 @@ namespace DataService
                         items[i].Value.Byte = cache.ReadByte(addrsArr[i]).Value;
                         break;
                     case DataType.WORD:
+                        items[i].Value.Word = cache.ReadUInt16(addrsArr[i]).Value;
+                        break;
                     case DataType.SHORT:
                         items[i].Value.Int16 = cache.ReadInt16(addrsArr[i]).Value;
                         break;
-                    case DataType.TIME:
+                    case DataType.DWORD:
+                        items[i].Value.DWord = cache.ReadUInt32(addrsArr[i]).Value;
+                        break;
                     case DataType.INT:
                         items[i].Value.Int32 = cache.ReadInt32(addrsArr[i]).Value;
                         break;
@@ -413,31 +362,6 @@ namespace DataService
             return filetime == 0 ? DateTime.Now : DateTime.FromFileTime(filetime);
         }
 
-        public static VarEnum ToVarEnum(this DataType dataType)
-        {
-            switch (dataType)
-            {
-                case DataType.BOOL:
-                    return VarEnum.VT_BOOL;
-                case DataType.BYTE:
-                    return VarEnum.VT_UI1;
-                case DataType.WORD:
-                    return VarEnum.VT_UI2;
-                case DataType.SHORT:
-                    return VarEnum.VT_I2;
-                case DataType.TIME:
-                    return VarEnum.VT_FILETIME;
-                case DataType.INT:
-                    return VarEnum.VT_I4;
-                case DataType.FLOAT:
-                    return VarEnum.VT_R4;
-                case DataType.STR:
-                    return VarEnum.VT_BSTR;
-                default:
-                    return VarEnum.VT_VARIANT;
-            }
-        }
-
         public static Type ToType(this DataType dataType)
         {
             switch (dataType)
@@ -451,8 +375,9 @@ namespace DataService
                 case DataType.SHORT:
                     return typeof(short);
                 case DataType.INT:
-                case DataType.TIME:
                     return typeof(int);
+                case DataType.DWORD:
+                    return typeof(uint);
                 case DataType.FLOAT:
                     return typeof(float);
                 case DataType.STR:
@@ -519,10 +444,14 @@ namespace DataService
                     value.Byte = Convert.ToByte(obj);
                     break;
                 case DataType.WORD:
+                    value.Word = Convert.ToUInt16(obj);
+                    break;
                 case DataType.SHORT:
                     value.Int16 = Convert.ToInt16(obj);
                     break;
-                case DataType.TIME:
+                case DataType.DWORD:
+                    value.DWord = Convert.ToUInt32(obj);
+                    break;
                 case DataType.INT:
                     value.Int32 = Convert.ToInt32(obj);
                     break;
@@ -542,8 +471,11 @@ namespace DataService
                 case DataType.BYTE:
                     return new byte[] { tag.Value.Byte };
                 case DataType.WORD:
+                    return BitConverter.GetBytes(tag.Value.Word);
                 case DataType.SHORT:
                     return BitConverter.GetBytes(tag.Value.Int16);
+                case DataType.DWORD:
+                    return BitConverter.GetBytes(tag.Value.DWord);
                 case DataType.INT:
                     return BitConverter.GetBytes(tag.Value.Int32);
                 case DataType.FLOAT:
@@ -564,8 +496,11 @@ namespace DataService
                 case DataType.BYTE:
                     return new byte[] { value.Byte };
                 case DataType.WORD:
+                    return BitConverter.GetBytes(value.Word);
                 case DataType.SHORT:
                     return BitConverter.GetBytes(value.Int16);
+                case DataType.DWORD:
+                    return BitConverter.GetBytes(value.DWord);
                 case DataType.INT:
                     return BitConverter.GetBytes(value.Int32);
                 case DataType.FLOAT:
@@ -586,9 +521,11 @@ namespace DataService
                 case DataType.BYTE:
                     return value.Byte;
                 case DataType.WORD:
+                    return value.Word;
                 case DataType.SHORT:
                     return value.Int16;
-                case DataType.TIME:
+                case DataType.DWORD:
+                    return value.DWord;
                 case DataType.INT:
                     return value.Int32;
                 case DataType.FLOAT:
@@ -630,12 +567,15 @@ namespace DataService
                 switch (type)
                 {
                     case DataType.BYTE:
-                        return (float)value.Byte;
+                        return value.Byte;
                     case DataType.WORD:
+                        return value.Word;
                     case DataType.SHORT:
-                        return (float)value.Int16;
+                        return value.Int16;
+                    case DataType.DWORD:
+                        return value.DWord;
                     case DataType.INT:
-                        return (float)value.Int32;
+                        return value.Int32;
                     case DataType.FLOAT:
                         return value.Single;
                     case DataType.STR:
@@ -653,8 +593,13 @@ namespace DataService
                         temp = (value.Byte - meta.RawLo) / (meta.RawHi - meta.RawLo);
                         break;
                     case DataType.WORD:
+                        temp = (value.Word - meta.RawLo) / (meta.RawHi - meta.RawLo);
+                        break;
                     case DataType.SHORT:
                         temp = (value.Int16 - meta.RawLo) / (meta.RawHi - meta.RawLo);
+                        break;
+                    case DataType.DWORD:
+                        temp = (value.DWord - meta.RawLo) / (meta.RawHi - meta.RawLo);
                         break;
                     case DataType.INT:
                         temp = (value.Int32 - meta.RawLo) / (meta.RawHi - meta.RawLo);
@@ -700,38 +645,38 @@ namespace DataService
     public static class Utility
     {
         private static readonly ushort[] crcTable = {
-        	0X0000, 0XC0C1, 0XC181, 0X0140, 0XC301, 0X03C0, 0X0280, 0XC241,
-        	0XC601, 0X06C0, 0X0780, 0XC741, 0X0500, 0XC5C1, 0XC481, 0X0440,
-        	0XCC01, 0X0CC0, 0X0D80, 0XCD41, 0X0F00, 0XCFC1, 0XCE81, 0X0E40,
-        	0X0A00, 0XCAC1, 0XCB81, 0X0B40, 0XC901, 0X09C0, 0X0880, 0XC841,
-        	0XD801, 0X18C0, 0X1980, 0XD941, 0X1B00, 0XDBC1, 0XDA81, 0X1A40,
-        	0X1E00, 0XDEC1, 0XDF81, 0X1F40, 0XDD01, 0X1DC0, 0X1C80, 0XDC41,
-        	0X1400, 0XD4C1, 0XD581, 0X1540, 0XD701, 0X17C0, 0X1680, 0XD641,
-        	0XD201, 0X12C0, 0X1380, 0XD341, 0X1100, 0XD1C1, 0XD081, 0X1040,
-        	0XF001, 0X30C0, 0X3180, 0XF141, 0X3300, 0XF3C1, 0XF281, 0X3240,
-        	0X3600, 0XF6C1, 0XF781, 0X3740, 0XF501, 0X35C0, 0X3480, 0XF441,
-        	0X3C00, 0XFCC1, 0XFD81, 0X3D40, 0XFF01, 0X3FC0, 0X3E80, 0XFE41,
-        	0XFA01, 0X3AC0, 0X3B80, 0XFB41, 0X3900, 0XF9C1, 0XF881, 0X3840,
-        	0X2800, 0XE8C1, 0XE981, 0X2940, 0XEB01, 0X2BC0, 0X2A80, 0XEA41,
-        	0XEE01, 0X2EC0, 0X2F80, 0XEF41, 0X2D00, 0XEDC1, 0XEC81, 0X2C40,
-        	0XE401, 0X24C0, 0X2580, 0XE541, 0X2700, 0XE7C1, 0XE681, 0X2640,
-        	0X2200, 0XE2C1, 0XE381, 0X2340, 0XE101, 0X21C0, 0X2080, 0XE041,
-        	0XA001, 0X60C0, 0X6180, 0XA141, 0X6300, 0XA3C1, 0XA281, 0X6240,
-        	0X6600, 0XA6C1, 0XA781, 0X6740, 0XA501, 0X65C0, 0X6480, 0XA441,
-        	0X6C00, 0XACC1, 0XAD81, 0X6D40, 0XAF01, 0X6FC0, 0X6E80, 0XAE41,
-        	0XAA01, 0X6AC0, 0X6B80, 0XAB41, 0X6900, 0XA9C1, 0XA881, 0X6840,
-        	0X7800, 0XB8C1, 0XB981, 0X7940, 0XBB01, 0X7BC0, 0X7A80, 0XBA41,
-        	0XBE01, 0X7EC0, 0X7F80, 0XBF41, 0X7D00, 0XBDC1, 0XBC81, 0X7C40,
-        	0XB401, 0X74C0, 0X7580, 0XB541, 0X7700, 0XB7C1, 0XB681, 0X7640,
-        	0X7200, 0XB2C1, 0XB381, 0X7340, 0XB101, 0X71C0, 0X7080, 0XB041,
-        	0X5000, 0X90C1, 0X9181, 0X5140, 0X9301, 0X53C0, 0X5280, 0X9241,
-        	0X9601, 0X56C0, 0X5780, 0X9741, 0X5500, 0X95C1, 0X9481, 0X5440,
-        	0X9C01, 0X5CC0, 0X5D80, 0X9D41, 0X5F00, 0X9FC1, 0X9E81, 0X5E40,
-        	0X5A00, 0X9AC1, 0X9B81, 0X5B40, 0X9901, 0X59C0, 0X5880, 0X9841,
-        	0X8801, 0X48C0, 0X4980, 0X8941, 0X4B00, 0X8BC1, 0X8A81, 0X4A40,
-        	0X4E00, 0X8EC1, 0X8F81, 0X4F40, 0X8D01, 0X4DC0, 0X4C80, 0X8C41,
-        	0X4400, 0X84C1, 0X8581, 0X4540, 0X8701, 0X47C0, 0X4680, 0X8641,
-        	0X8201, 0X42C0, 0X4380, 0X8341, 0X4100, 0X81C1, 0X8081, 0X4040 
+            0X0000, 0XC0C1, 0XC181, 0X0140, 0XC301, 0X03C0, 0X0280, 0XC241,
+            0XC601, 0X06C0, 0X0780, 0XC741, 0X0500, 0XC5C1, 0XC481, 0X0440,
+            0XCC01, 0X0CC0, 0X0D80, 0XCD41, 0X0F00, 0XCFC1, 0XCE81, 0X0E40,
+            0X0A00, 0XCAC1, 0XCB81, 0X0B40, 0XC901, 0X09C0, 0X0880, 0XC841,
+            0XD801, 0X18C0, 0X1980, 0XD941, 0X1B00, 0XDBC1, 0XDA81, 0X1A40,
+            0X1E00, 0XDEC1, 0XDF81, 0X1F40, 0XDD01, 0X1DC0, 0X1C80, 0XDC41,
+            0X1400, 0XD4C1, 0XD581, 0X1540, 0XD701, 0X17C0, 0X1680, 0XD641,
+            0XD201, 0X12C0, 0X1380, 0XD341, 0X1100, 0XD1C1, 0XD081, 0X1040,
+            0XF001, 0X30C0, 0X3180, 0XF141, 0X3300, 0XF3C1, 0XF281, 0X3240,
+            0X3600, 0XF6C1, 0XF781, 0X3740, 0XF501, 0X35C0, 0X3480, 0XF441,
+            0X3C00, 0XFCC1, 0XFD81, 0X3D40, 0XFF01, 0X3FC0, 0X3E80, 0XFE41,
+            0XFA01, 0X3AC0, 0X3B80, 0XFB41, 0X3900, 0XF9C1, 0XF881, 0X3840,
+            0X2800, 0XE8C1, 0XE981, 0X2940, 0XEB01, 0X2BC0, 0X2A80, 0XEA41,
+            0XEE01, 0X2EC0, 0X2F80, 0XEF41, 0X2D00, 0XEDC1, 0XEC81, 0X2C40,
+            0XE401, 0X24C0, 0X2580, 0XE541, 0X2700, 0XE7C1, 0XE681, 0X2640,
+            0X2200, 0XE2C1, 0XE381, 0X2340, 0XE101, 0X21C0, 0X2080, 0XE041,
+            0XA001, 0X60C0, 0X6180, 0XA141, 0X6300, 0XA3C1, 0XA281, 0X6240,
+            0X6600, 0XA6C1, 0XA781, 0X6740, 0XA501, 0X65C0, 0X6480, 0XA441,
+            0X6C00, 0XACC1, 0XAD81, 0X6D40, 0XAF01, 0X6FC0, 0X6E80, 0XAE41,
+            0XAA01, 0X6AC0, 0X6B80, 0XAB41, 0X6900, 0XA9C1, 0XA881, 0X6840,
+            0X7800, 0XB8C1, 0XB981, 0X7940, 0XBB01, 0X7BC0, 0X7A80, 0XBA41,
+            0XBE01, 0X7EC0, 0X7F80, 0XBF41, 0X7D00, 0XBDC1, 0XBC81, 0X7C40,
+            0XB401, 0X74C0, 0X7580, 0XB541, 0X7700, 0XB7C1, 0XB681, 0X7640,
+            0X7200, 0XB2C1, 0XB381, 0X7340, 0XB101, 0X71C0, 0X7080, 0XB041,
+            0X5000, 0X90C1, 0X9181, 0X5140, 0X9301, 0X53C0, 0X5280, 0X9241,
+            0X9601, 0X56C0, 0X5780, 0X9741, 0X5500, 0X95C1, 0X9481, 0X5440,
+            0X9C01, 0X5CC0, 0X5D80, 0X9D41, 0X5F00, 0X9FC1, 0X9E81, 0X5E40,
+            0X5A00, 0X9AC1, 0X9B81, 0X5B40, 0X9901, 0X59C0, 0X5880, 0X9841,
+            0X8801, 0X48C0, 0X4980, 0X8941, 0X4B00, 0X8BC1, 0X8A81, 0X4A40,
+            0X4E00, 0X8EC1, 0X8F81, 0X4F40, 0X8D01, 0X4DC0, 0X4C80, 0X8C41,
+            0X4400, 0X84C1, 0X8581, 0X4540, 0X8701, 0X47C0, 0X4680, 0X8641,
+            0X8201, 0X42C0, 0X4380, 0X8341, 0X4100, 0X81C1, 0X8081, 0X4040
         };
 
         /// <summary>
@@ -855,10 +800,12 @@ namespace DataService
 
         public static unsafe short NetToInt16(byte[] value, int startIndex)
         {
-            if (value == null || startIndex > value.Length - 2)
+            if (value == null || startIndex > value.Length)
             {
                 throw new NotImplementedException();
             }
+            if (startIndex > value.Length - 2)
+                return value[value.Length - startIndex];
             fixed (byte* numRef = &(value[startIndex]))
             {
                 return (short)((numRef[0] << 8) | numRef[1]);
@@ -867,10 +814,12 @@ namespace DataService
 
         public static unsafe int NetToInt32(byte[] value, int startIndex)
         {
-            if (value == null || startIndex > value.Length - 4)
+            if (value == null || startIndex > value.Length)
             {
                 throw new NotImplementedException();
             }
+            if (startIndex > value.Length - 4)
+                return value[value.Length - startIndex];
             fixed (byte* numRef = &(value[startIndex]))
             {
                 return (int)((numRef[0] << 24) | (numRef[1] << 16) | (numRef[2] << 8) | numRef[3]);
@@ -890,6 +839,79 @@ namespace DataService
                 return string.Empty;
             var klen = bytes[start + 1];
             return Encoding.ASCII.GetString(bytes, start + 2, klen).Trim((char)0);
+        }
+
+        public static ushort ReverseInt16(short value)
+        {
+            ushort low = (ushort)(((ushort)value & (ushort)0xFFU) << 8);
+            ushort high = (ushort)(((ushort)value & (ushort)0xFF00U) >> 8);
+            return (ushort)(low | high);
+        }
+
+        /// <summary>
+        /// 掐头去尾得到数据字符串 
+        /// </summary>
+        /// <param name="allStr">全部字符串</param>
+        /// <param name="startStr">头字符串</param>
+        /// <param name="endStr">尾字符串</param>
+        /// <returns></returns>
+        public static string Pinchstring(string allStr, string startStr, string endStr)
+        {
+            int i1 = allStr.IndexOf(startStr);
+            int i2 = allStr.IndexOf(endStr);
+            string result;
+            try
+            {
+                result = allStr.Substring(i1 + startStr.Length, i2 - i1 - startStr.Length);
+            }
+            catch
+            {
+                return string.Empty;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 异或校验
+        /// </summary>
+        /// <param name="xorStr">传进来进行校验的字符串</param>
+        /// <returns>校验码</returns>
+        public static string XorCheck(string xorStr)
+        {
+
+            try
+            {
+                //小写转换成大写，因为XOR校验区分大小写
+                /*****************************************************
+                * XOR校验（异或校验）
+                * VerifyByte是得到的校验码
+                ***************************************************/
+                xorStr = xorStr.ToUpper();
+                byte[] bt = Encoding.Default.GetBytes(xorStr);
+                byte VerifyByte = bt[0];
+                for (int i = 1; i < bt.Length; i++)
+                {
+                    VerifyByte = (byte)(VerifyByte ^ bt[i]);
+                }
+
+                /**********************************
+                 * 校验码如果小于0X10则十位补零
+                 * **********************************/
+                string xor = "";
+                if (VerifyByte < 16)
+                {
+                    xor = "0" + VerifyByte.ToString("X");
+                }
+                else
+                {
+                    xor = VerifyByte.ToString("X");
+                }
+                return xor;
+            }
+            catch
+            {
+                throw;
+            }
         }
     }
 }

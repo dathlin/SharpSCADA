@@ -33,11 +33,11 @@
   <ItemGroup>
     <Reference Include="Microsoft.Windows.Design.Extensibility, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>C:\Program Files (x86)\Microsoft Visual Studio 10.0\Common7\IDE\PublicAssemblies\Microsoft.Windows.Design.Extensibility.dll</HintPath>
+      <HintPath>..\..\dll\Microsoft.Windows.Design.Extensibility.dll</HintPath>
     </Reference>
     <Reference Include="Microsoft.Windows.Design.Interaction, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>C:\Program Files (x86)\Microsoft Visual Studio 10.0\Common7\IDE\PublicAssemblies\Microsoft.Windows.Design.Interaction.dll</HintPath>
+      <HintPath>..\..\dll\Microsoft.Windows.Design.Interaction.dll</HintPath>
     </Reference>
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
@@ -65,6 +65,7 @@
     <Compile Include="TagComplexEditor.Designer.cs">
       <DependentUpon>TagComplexEditor.cs</DependentUpon>
     </Compile>
+    <Compile Include="TagData.cs" />
     <Compile Include="TagList.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -104,6 +105,10 @@
     </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\DataHelper\DataHelper.csproj">
+      <Project>{755c5459-bca4-4729-a93c-0c73a41bdf3c}</Project>
+      <Name>DataHelper</Name>
+    </ProjectReference>
     <ProjectReference Include="..\HMIControl\HMIControl.csproj">
       <Project>{F9F0BFA7-0C4A-4C8C-B81C-2A0477CBF637}</Project>
       <Name>HMIControl</Name>

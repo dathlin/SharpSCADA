@@ -177,12 +177,16 @@ namespace OPCDriver
                                     dataItem = new ByteTag((short)itemDef.hClient, new DeviceAddress(-0x100, 0, 0, Marshal.ReadInt32(pAddResults), 1, 0, DataType.BYTE), this);
                                     break;
                                 case DataType.WORD:
+                                    dataItem = new UShortTag((short)itemDef.hClient, new DeviceAddress(-0x100, 0, 0, Marshal.ReadInt32(pAddResults), 2, 0, DataType.WORD), this);
+                                    break;
                                 case DataType.SHORT:
                                     dataItem = new ShortTag((short)itemDef.hClient, new DeviceAddress(-0x100, 0, 0, Marshal.ReadInt32(pAddResults), 2, 0, DataType.SHORT), this);
                                     break;
                                 case DataType.INT:
-                                case DataType.TIME:
                                     dataItem = new IntTag((short)itemDef.hClient, new DeviceAddress(-0x100, 0, 0, Marshal.ReadInt32(pAddResults), 4, 0, DataType.INT), this);
+                                    break;
+                                case DataType.DWORD:
+                                    dataItem = new UIntTag((short)itemDef.hClient, new DeviceAddress(-0x100, 0, 0, Marshal.ReadInt32(pAddResults), 4, 0, DataType.DWORD), this);
                                     break;
                                 case DataType.FLOAT:
                                     dataItem = new FloatTag((short)itemDef.hClient, new DeviceAddress(-0x100, 0, 0, Marshal.ReadInt32(pAddResults), 4, 0, DataType.FLOAT), this);
@@ -321,8 +325,13 @@ namespace OPCDriver
                                     values[i].Value.Byte = Marshal.ReadByte(pItemValues + 16);
                                     break;
                                 case DataType.WORD:
+                                    values[i].Value.Word = (ushort)Marshal.ReadInt16(pItemValues + 16);
+                                    break;
                                 case DataType.SHORT:
                                     values[i].Value.Int16 = Marshal.ReadInt16(pItemValues + 16);
+                                    break;
+                                case DataType.DWORD:
+                                    values[i].Value.DWord = (uint)Marshal.ReadInt32(pItemValues + 16);
                                     break;
                                 case DataType.INT:
                                     values[i].Value.Int32 = Marshal.ReadInt32(pItemValues + 16);
@@ -408,6 +417,18 @@ namespace OPCDriver
             Marshal.FreeCoTaskMem(pItemValues);
             Marshal.FreeCoTaskMem(pErrors);
             return rt;
+        }
+
+        public ItemData<uint> ReadUInt32(DeviceAddress address, DataSource source = DataSource.Cache)
+        {
+            var rt = ReadInt32(address, source);
+            return new ItemData<uint>((uint)rt.Value, rt.TimeStamp, rt.Quality);
+        }
+
+        public ItemData<ushort> ReadUInt16(DeviceAddress address, DataSource source = DataSource.Cache)
+        {
+            var rt = ReadInt16(address, source);
+            return new ItemData<ushort>((ushort)rt.Value, rt.TimeStamp, rt.Quality);
         }
 
         public ItemData<short> ReadInt16(DeviceAddress address, DataSource source = DataSource.Cache)
@@ -540,6 +561,22 @@ namespace OPCDriver
             return rt;
         }
 
+        public int WriteUInt32(DeviceAddress address, uint value)
+        {
+            IntPtr pErrors;
+            int rt = _sync.Write(1, new int[1] { address.Start }, new object[] { value }, out pErrors);
+            Marshal.FreeCoTaskMem(pErrors);
+            return rt;
+        }
+
+        public int WriteUInt16(DeviceAddress address, ushort value)
+        {
+            IntPtr pErrors;
+            int rt = _sync.Write(1, new int[1] { address.Start }, new object[] { value }, out pErrors);
+            Marshal.FreeCoTaskMem(pErrors);
+            return rt;
+        }
+
         public int WriteInt16(DeviceAddress address, short value)
         {
             IntPtr pErrors;
@@ -656,8 +693,13 @@ namespace OPCDriver
                                 value.Byte = Marshal.ReadByte(pvValues + 8);
                                 break;
                             case DataType.WORD:
+                                value.Word = (ushort)Marshal.ReadInt16(pvValues + 8);
+                                break;
                             case DataType.SHORT:
                                 value.Int16 = Marshal.ReadInt16(pvValues + 8);
+                                break;
+                            case DataType.DWORD:
+                                value.DWord = (uint)Marshal.ReadInt32(pvValues + 8);
                                 break;
                             case DataType.INT:
                                 value.Int32 = Marshal.ReadInt32(pvValues + 8);
@@ -726,8 +768,13 @@ namespace OPCDriver
                             value.Byte = Marshal.ReadByte(pvValues + 8);
                             break;
                         case DataType.WORD:
+                            value.Word = (ushort)Marshal.ReadInt16(pvValues + 8);
+                            break;
                         case DataType.SHORT:
                             value.Int16 = Marshal.ReadInt16(pvValues + 8);
+                            break;
+                        case DataType.DWORD:
+                            value.DWord = (uint)Marshal.ReadInt32(pvValues + 8);
                             break;
                         case DataType.INT:
                             value.Int32 = Marshal.ReadInt32(pvValues + 8);
@@ -795,7 +842,7 @@ namespace OPCDriver
     [Description("OPC Client")]
     public class OPCReader : IOPCShutdown, IDriver
     {
-        private string _clsidOPCserver, _serverIP;
+        private string _clsidOPCserver = "{6E6170F0-FF2D-11D2-8087-00105AA8F840}", _serverIP;
         private object _opcServerObj;
         private IOPCServer _opcServer;
         private IOPCItemProperties _opcProp;
@@ -804,23 +851,27 @@ namespace OPCDriver
         private IConnectionPoint _shutDownPoint;
         private int _shutDownCookie;
 
-        public OPCReader(IDataServer dataServer, short id, string name, string serverIP = null,
-            int timeout = 0, string clsidOPCserver = "{6E6170F0-FF2D-11D2-8087-00105AA8F840}", string spare2 = null)
+        public string TypeID
+        {
+            get { return _clsidOPCserver; }
+            set { _clsidOPCserver = value; }
+        }
+
+        public OPCReader(IDataServer dataServer, short id, string name)
         {
             this._id = id;
             this._dataServer = dataServer;
-            this._clsidOPCserver = clsidOPCserver;
-            this._serverIP = serverIP;
-            if (string.IsNullOrEmpty(serverIP)) _serverIP = null;
             this._name = name;
-            Connect();
         }
 
         public bool Connect()
         {
             if (_opcServerObj != null)
                 Dispose();
-            Type svrComponenttype = Type.GetTypeFromCLSID(new Guid(_clsidOPCserver), _serverIP, false);
+            if (string.IsNullOrEmpty(_serverIP)) _serverIP = null;
+            Guid cid;
+            Type svrComponenttype = Guid.TryParse(_clsidOPCserver, out cid) ? Type.GetTypeFromCLSID(cid, _serverIP, false)
+                : Type.GetTypeFromProgID(_clsidOPCserver, _serverIP, false);
             if (svrComponenttype == null)
                 return false;
             try
@@ -920,13 +971,13 @@ namespace OPCDriver
         #endregion
 
         #region IOPCShutdown Members
-        public event ShutdownRequestEventHandler OnClose;
+        public event IOErrorEventHandler OnError;
 
         public void ShutdownRequest(string szReason)
         {
             this.Close();
-            if (OnClose != null)
-                OnClose(this, new ShutdownRequestEventArgs(szReason));
+            if (OnError != null)
+                OnError(this, new IOErrorEventArgs(szReason));
         }
 
         #endregion
@@ -1040,8 +1091,10 @@ namespace OPCDriver
 
         public IGroup AddGroup(string name, short id, int updateRate, float deadBand, bool active)
         {
+            if (IsClosed)
+                Connect();
             if (!_metaGroups.Exists(x => x.ID == id))
-                _metaGroups.Add(new MetaGroup { ID = id, Name = name, UpdateRate = updateRate, DeadBand = deadBand, Active = active });
+                _metaGroups.Add(new MetaGroup { ID = id, Name = name, UpdateRate = updateRate, DeadBand = deadBand, Active = active }); 
             if (_opcServer == null) return null;
             GCHandle hDeadband, hTimeBias;
             hDeadband = GCHandle.Alloc(deadBand, GCHandleType.Pinned);

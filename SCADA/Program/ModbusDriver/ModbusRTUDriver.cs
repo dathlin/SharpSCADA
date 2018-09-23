@@ -1,17 +1,20 @@
-﻿using System;
+﻿using DataService;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.IO.Ports;
 using System.Text;
-using System.Timers;
-using DataService;
+using System.Threading;
 
 namespace ModbusDriver
 {
     [Description("Modbus RTU协议")]
+    //ModbusRTUReader : IPLCDriver         IPLCDriver : IDriver, IReaderWriter              IDriver : IDisposable
     public sealed class ModbusRTUReader : IPLCDriver
     {
+        #region :IDriver
+        //从站地址
         short _id;
         public short ID
         {
@@ -19,76 +22,6 @@ namespace ModbusDriver
             {
                 return _id;
             }
-        }
-
-        private SerialPort _serialPort;
-        public int PDU
-        {
-            get { return 0x100; }
-        }
-
-        public DeviceAddress GetDeviceAddress(string address)
-        {
-            DeviceAddress dv = DeviceAddress.Empty;
-            if (string.IsNullOrEmpty(address))
-                return dv;
-            switch (address[0])
-            {
-                case '0':
-                    {
-                        dv.Area = Modbus.fctReadCoil;
-                        int st;
-                        int.TryParse(address, out st);
-                        dv.Bit = (byte)(st % 16);
-                        st /= 16;
-                        dv.Start = st;
-                    }
-                    break;
-                case '1':
-                    {
-                        dv.Area = Modbus.fctReadDiscreteInputs;
-                        int st;
-                        int.TryParse(address.Substring(1), out st);
-                        dv.Bit = (byte)(st % 16);
-                        st /= 16;
-                        dv.Start = st;
-                    }
-                    break;
-                case '4':
-                    {
-                        int index = address.IndexOf('.');
-                        dv.Area = Modbus.fctReadHoldingRegister;
-                        if (index > 0)
-                        {
-                            dv.Start = int.Parse(address.Substring(1, index - 1));
-                            dv.Bit = byte.Parse(address.Substring(index + 1));
-                        }
-                        else
-                            dv.Start = int.Parse(address.Substring(1));
-                        dv.Start--;
-                    }
-                    break;
-                case '3':
-                    {
-                        int index = address.IndexOf('.');
-                        dv.Area = Modbus.fctReadInputRegister;
-                        if (index > 0)
-                        {
-                            dv.Start = int.Parse(address.Substring(1, index - 1));
-                            dv.Bit = byte.Parse(address.Substring(index + 1));
-                        }
-                        else
-                            dv.Start = int.Parse(address.Substring(1));
-                        dv.Start--;
-                    }
-                    break;
-            }
-            return dv;
-        }
-
-        public string GetAddress(DeviceAddress address)
-        {
-            return string.Empty;
         }
 
         string _name;
@@ -100,8 +33,9 @@ namespace ModbusDriver
             }
         }
 
-        string _port;
-        public string ServerName
+        string _port = "COM1";
+        [Category("串口设置"), Description("串口号")]
+        public string PortName
         {
             get { return _port; }
             set { _port = value; }
@@ -111,15 +45,49 @@ namespace ModbusDriver
         {
             get
             {
-                return _serialPort.IsOpen == false;
+                return _serialPort == null || _serialPort.IsOpen == false;
             }
         }
 
-        private int _timeOut;
+        private int _timeOut = 3000;
+        [Category("串口设置"), Description("通迅超时时间")]
         public int TimeOut
         {
             get { return _timeOut; }
             set { _timeOut = value; }
+        }
+
+
+        private int _baudRate = 9600;
+        [Category("串口设置"), Description("波特率")]
+        public int BaudRate
+        {
+            get { return _baudRate; }
+            set { _baudRate = value; }
+        }
+        //   private SerialPort _serialPort;
+
+        private int _dataBits = 8;
+        [Category("串口设置"), Description("数据位")]
+        public int DataBits
+        {
+            get { return _dataBits; }
+            set { _dataBits = value; }
+        }
+        private StopBits _stopBits = StopBits.One;
+        [Category("串口设置"), Description("停止位")]
+        public StopBits StopBits
+        {
+            get { return _stopBits; }
+            set { _stopBits = value; }
+        }
+
+        private Parity _parity = Parity.None;
+        [Category("串口设置"), Description("奇偶校验")]
+        public Parity Parity
+        {
+            get { return _parity; }
+            set { _parity = value; }
         }
 
         List<IGroup> _grps = new List<IGroup>();
@@ -134,34 +102,27 @@ namespace ModbusDriver
             get { return _server; }
         }
 
-        public ModbusRTUReader(IDataServer server, short id, string name, string remote = null, int timeOut = 10000, string port = "COM1", string baudRate = "9600")
-        {
-            _id = id;
-            _name = name;
-            _server = server;
-            _port = port;
-            _serialPort = new SerialPort(port);
-            _timeOut = timeOut;
-            _serialPort.ReadTimeout = _timeOut;
-            _serialPort.WriteTimeout = _timeOut;
-            _serialPort.BaudRate = int.Parse(baudRate);
-            _serialPort.DataBits = 8;
-            _serialPort.Parity = Parity.Even;
-            _serialPort.StopBits = StopBits.One;
-        }
-
         public bool Connect()
         {
             try
             {
+                if (_timeOut <= 0) _timeOut = 1000;
+                if (_serialPort == null)
+                    _serialPort = new SerialPort(_port);
+                _serialPort.ReadTimeout = _timeOut;
+                _serialPort.WriteTimeout = _timeOut;
+                _serialPort.BaudRate = _baudRate;
+                _serialPort.DataBits = _dataBits;
+                _serialPort.Parity = _parity;
+                _serialPort.StopBits = _stopBits;
                 _serialPort.Open();
                 return true;
             }
             catch (IOException error)
             {
-                if (OnClose != null)
+                if (OnError != null)
                 {
-                    OnClose(this, new ShutdownRequestEventArgs(error.Message));
+                    OnError(this, new IOErrorEventArgs(error.Message));
                 }
                 return false;
             }
@@ -169,7 +130,7 @@ namespace ModbusDriver
 
         public IGroup AddGroup(string name, short id, int updateRate, float deadBand = 0f, bool active = false)
         {
-            ModbusRtuGroup grp = new ModbusRtuGroup(id, name, updateRate, active, this);
+            ShortGroup grp = new ShortGroup(id, name, updateRate, active, this);
             _grps.Add(grp);
             return grp;
         }
@@ -179,130 +140,377 @@ namespace ModbusDriver
             grp.IsActive = false;
             return _grps.Remove(grp);
         }
-
-        public void Dispose()
+        public event IOErrorEventHandler OnError;
+        #endregion
+        //自定义构造函数3
+        public ModbusRTUReader(IDataServer server, short id, string name)
         {
-            foreach (IGroup grp in _grps)
-            {
-                grp.Dispose();
-            }
-            _grps.Clear();
-            _serialPort.Close();
+            _id = id;
+            _name = name;
+            _server = server;
         }
 
-        private byte[] CreateReadHeader(int startAddress, ushort length, byte function)
+        private SerialPort _serialPort;
+
+        /*
+         Sbyte:代表有符号的8位整数，数值范围从-128 ～ 127
+　      　Byte:代表无符号的8位整数，数值范围从0～255
+　     　Short:代表有符号的16位整数，范围从-32768 ～ 32767
+　     　ushort:代表有符号的16位整数，范围从0 到 65,535
+        Int:代表有符号的32位整数，范围从-2147483648 ～ 2147483648
+　　     uint:代表无符号的32位整数，范围从0 ～ 4294967295
+　     　Long:代表有符号的64位整数，范围从-9223372036854775808 ～ 9223372036854775808
+　     　Ulong:代表无符号的64位整数，范围从0 ～ 18446744073709551615。
+        */
+        private byte[] CreateReadHeader(int id, int startAddress, ushort length, byte function)
         {
             byte[] data = new byte[8];
-            data[0] = (byte)_id;				// Slave id high byte
+            data[0] = (byte)id;				// Slave id high byte   从站地址
             data[1] = function;					// Message size
-            byte[] _adr = BitConverter.GetBytes((short)startAddress);
-            data[2] = _adr[0];				// Start address
-            data[3] = _adr[1];				// Start address
+            byte[] _adr = BitConverter.GetBytes((short)startAddress);//以字节数组的形式返回指定的 16 位无符号整数值。
+            //apply on small endian, TODO:support big endian
+            data[2] = _adr[1];				// Start address 起始地址的高八位
+            data[3] = _adr[0];				// Start address起始地址的低八位
             byte[] _length = BitConverter.GetBytes((short)length);
-            data[4] = _length[0];			// Number of data to read
-            data[5] = _length[1];			// Number of data to read
+            //apply on small endian, TODO:support big endian
+            data[4] = _length[1];			// Number of data to read 寄存器数量的高八位
+            data[5] = _length[0];			// Number of data to read 寄存器数量的低八位
             byte[] arr = Utility.CalculateCrc(data, 6);
-            data[6] = arr[0];
-            data[7] = arr[1];
+            data[6] = arr[0]; //CRC校验的低八位
+            data[7] = arr[1];//CRC校验的高八位
             return data;
         }
 
-        public byte[] WriteSingleCoils(int startAddress, bool OnOff)
+        #region 写单个线圈或单个离散输出   功能码：0x05
+        public int WriteSingleCoils(int id, int startAddress, bool OnOff)
         {
             byte[] data = new byte[8];
-            data[0] = (byte)_id;				// Slave id high byte
+            data[0] = (byte)id;				// Slave id high byte
             data[1] = Modbus.fctWriteSingleCoil;				// Function code
             byte[] _adr = BitConverter.GetBytes((short)startAddress);
-            data[2] = _adr[0];				// Start address
-            data[3] = _adr[1];				// Start address
+            data[2] = _adr[1];				// Start address
+            data[3] = _adr[0];              // Start address
             if (OnOff) data[4] = 0xFF;
             byte[] arr = Utility.CalculateCrc(data, 6);
             data[6] = arr[0];
             data[7] = arr[1];
-            return data;
+            lock (_async)
+            {
+                _serialPort.Write(data, 0, data.Length);
+                int numBytesRead = 0;
+                var frameBytes = new byte[5];
+                while (numBytesRead != frameBytes.Length)
+                    numBytesRead += _serialPort.Read(frameBytes, numBytesRead, frameBytes.Length - numBytesRead);
+                var slave = frameBytes[0];
+                var code = frameBytes[1];
+                if (code == 0x85)//错误则只需读5字节
+                {
+                    var errorcode = frameBytes[2];
+                    if (OnError != null)
+                    {
+                        OnError(this, new IOErrorEventArgs(Modbus.GetErrorString(errorcode)));
+                    }
+                    Thread.Sleep(10);
+                    return -1;
+                }
+                else//正确需8字节
+                {
+                    numBytesRead = 0;
+                    while (numBytesRead < 3)
+                        numBytesRead += _serialPort.Read(frameBytes, numBytesRead, 3 - numBytesRead);
+                    Thread.Sleep(10);
+                    return 0;
+                }
+            }
         }
+        #endregion
 
-        public byte[] WriteMultipleCoils(int startAddress, ushort numBits, byte[] values)
+        #region 写多个线圈  功能码：0x0F   15
+        public int WriteMultipleCoils(int id, int startAddress, ushort numBits, byte[] values)
         {
             int len = values.Length;
             byte[] data = new byte[len + 9];
-            data[0] = (byte)_id;				// Slave id high byte
-            data[1] = Modbus.fctWriteMultipleCoils;				// Function code
+            data[0] = (byte)id;				// Slave id high byte  从站地址高八位
+            data[1] = Modbus.fctWriteMultipleCoils;				// Function code  功能码
             byte[] _adr = BitConverter.GetBytes((short)startAddress);
-            data[2] = _adr[0];				// Start address
-            data[3] = _adr[1];				// Start address
+            data[2] = _adr[1];				// Start address       开始地址高八位
+            data[3] = _adr[0];				// Start address       开始地址低八位
             byte[] _length = BitConverter.GetBytes((short)numBits);
-            data[4] = _length[0];			// Number of data to read
-            data[5] = _length[1];			// Number of data to read
-            data[6] = (byte)len;
-            Array.Copy(values, 0, data, 7, len);
+            data[4] = _length[1];			// Number of data to read  寄存器数量高八位
+            data[5] = _length[0];           // Number of data to read  寄存器数量低八位
+            data[6] = (byte)len;            //字节数量
+            Array.Copy(values, 0, data, 7, len);  //在data中加入变更数据
             byte[] arr = Utility.CalculateCrc(data, len + 7);
-            data[len + 7] = arr[0];
-            data[len + 8] = arr[1];
-            return data;
+            data[len + 7] = arr[0];  //CRC校验的低八位
+            data[len + 8] = arr[1];  //CRC校验的高八位
+            lock (_async)
+            {
+                _serialPort.Write(data, 0, data.Length);
+                int numBytesRead = 0;
+                var frameBytes = new byte[5];
+                while (numBytesRead != frameBytes.Length)
+                    numBytesRead += _serialPort.Read(frameBytes, numBytesRead, frameBytes.Length - numBytesRead);
+                var slave = frameBytes[0];
+                var code = frameBytes[1];
+                if (code == 0x85)//错误则只需读5字节
+                {
+                    var errorcode = frameBytes[2];
+                    if (OnError != null)
+                    {
+                        OnError(this, new IOErrorEventArgs(Modbus.GetErrorString(errorcode)));
+                    }
+                    Thread.Sleep(10);
+                    return -1;
+                }
+                else//正确需9字节
+                {
+                    numBytesRead = 0;
+                    while (numBytesRead < 4)
+                        numBytesRead += _serialPort.Read(frameBytes, numBytesRead, 3 - numBytesRead);
+                    Thread.Sleep(10);
+                    return 0;
+                }
+            }
         }
+        #endregion
 
-        public byte[] WriteSingleRegister(int startAddress, byte[] values)
+        #region 写单个保持寄存器 功能码:0x06
+        public int WriteSingleRegister(int id, int startAddress, byte[] values)
         {
             byte[] data = new byte[8];
-            data[0] = (byte)_id;				// Slave id high byte
-            data[1] = Modbus.fctWriteSingleRegister;				// Function code
+            data[0] = (byte)id;				// Slave id high byte 从站地址高八位
+            data[1] = Modbus.fctWriteSingleRegister;				// Function code 功能码
             byte[] _adr = BitConverter.GetBytes((short)startAddress);
-            data[2] = _adr[0];				// Start address
-            data[3] = _adr[1];				// Start address
-            data[4] = values[0];
-            data[5] = values[1];
+            data[2] = _adr[1];				// Start address    开始地址高八位
+            data[3] = _adr[0];				// Start address    开始地址高八位
+            data[4] = values[1];            //变更数据的高位
+            data[5] = values[0];            //变更数据的低位
             byte[] arr = Utility.CalculateCrc(data, 6);
-            data[6] = arr[0];
-            data[7] = arr[1];
-            return data;
+            data[6] = arr[0];               //CRC校验码低八位
+            data[7] = arr[1];               //CRC校验码高八位
+            lock (_async)
+            {
+                _serialPort.Write(data, 0, data.Length);
+                int numBytesRead = 0;
+                var frameBytes = new byte[5];
+                while (numBytesRead != frameBytes.Length)
+                    numBytesRead += _serialPort.Read(frameBytes, numBytesRead, frameBytes.Length - numBytesRead);
+                var slave = frameBytes[0];
+                var code = frameBytes[1];
+                if (code == 0x85)//错误则只需读5字节
+                {
+                    var errorcode = frameBytes[2];
+                    if (OnError != null)
+                    {
+                        OnError(this, new IOErrorEventArgs(Modbus.GetErrorString(errorcode)));
+                    }
+                    Thread.Sleep(10);
+                    return -1;
+                }
+                else//正确需8字节
+                {
+                    numBytesRead = 0;
+                    while (numBytesRead < 3)
+                        numBytesRead += _serialPort.Read(frameBytes, numBytesRead, 3 - numBytesRead);
+                    Thread.Sleep(10);
+                    return 0;
+                }
+            }
         }
+        #endregion
 
-        public byte[] WriteMultipleRegister(int startAddress, byte[] values)
+        #region 写多个保持寄存器 功能码：0x10    16
+        public int WriteMultipleRegister(int id, int startAddress, byte[] values)
         {
             int len = values.Length;
             if (len % 2 > 0) len++;
             byte[] data = new byte[len + 9];
-            data[0] = (byte)_id;				// Slave id high byte
-            data[1] = Modbus.fctWriteMultipleRegister;				// Function code
+            data[0] = (byte)id;			// Slave id high byte  从站地址
+            data[1] = Modbus.fctWriteMultipleRegister;				// Function code  功能码
             byte[] _adr = BitConverter.GetBytes((short)startAddress);
-            data[2] = _adr[0];				// Start address
-            data[3] = _adr[1];				// Start address
+            data[2] = _adr[1];				// Start address        开始地址高八位
+            data[3] = _adr[0];				// Start address        开始地址低八位
             byte[] _length = BitConverter.GetBytes((short)(len >> 1));
-            data[4] = _length[0];			// Number of data to read
-            data[5] = _length[1];			// Number of data to read
-            data[6] = (byte)len;
-            Array.Copy(values, 0, data, 7, len);
+            data[4] = _length[1];			// Number of data to read 寄存器数量高八位
+            data[5] = _length[0];			// Number of data to read 寄存器数量低八位
+            data[6] = (byte)len;            //字节数
+            Array.Copy(values, 0, data, 7, len); //把变更数据加入data中
             byte[] arr = Utility.CalculateCrc(data, len + 7);
-            data[len + 7] = arr[0];
-            data[len + 8] = arr[1];
-            return data;
+            data[len + 7] = arr[0];          //crc校验的低八位
+            data[len + 8] = arr[1];          //CRC校验的高八位
+            lock (_async)
+            {
+                _serialPort.Write(data, 0, data.Length);
+                int numBytesRead = 0;
+                var frameBytes = new byte[5];
+                while (numBytesRead != frameBytes.Length)
+                    numBytesRead += _serialPort.Read(frameBytes, numBytesRead, frameBytes.Length - numBytesRead);
+                var slave = frameBytes[0];
+                var code = frameBytes[1];
+                if (code == 0x85)//错误则只需读5字节
+                {
+                    var errorcode = frameBytes[2];
+                    if (OnError != null)
+                    {
+                        OnError(this, new IOErrorEventArgs(Modbus.GetErrorString(errorcode)));
+                    }
+                    Thread.Sleep(10);
+                    return -1;
+                }
+                else//正确需8字节
+                {
+                    numBytesRead = 0;
+                    while (numBytesRead < 3)
+                        numBytesRead += _serialPort.Read(frameBytes, numBytesRead, 3 - numBytesRead);
+                    Thread.Sleep(10);
+                    return 0;
+                }
+            }
+        }
+        #endregion
+
+        #region  :IPLCDriver
+        public int PDU
+        {
+            // get { return 0x100; } //0x100十进制值为256
+            /* 更新人：yjz
+               更新日期：20171125
+               更新原因： 在串行通信中RS232 / RS485  modbus协议规定如下：
+                        ADU=地址域+功能码+数据+差错校验   其中 ADU 256字节，地址域1字节，功能码1字节，数据为252字节 ，    差错检验2字节，
+                        PDU=功能码+数据        
+                        所以PDU应为： 253字节 */
+            get { return 0xFD; } //0xFD 十进制为253
+        }
+        private string _serverName = "unknown";
+        public string ServerName
+        {
+            get { return _serverName; }
+            set { _serverName = value; }
         }
 
+        public DeviceAddress GetDeviceAddress(string address)
+        {
+            DeviceAddress dv = DeviceAddress.Empty;
+            if (string.IsNullOrEmpty(address))
+                return dv;
+            var sindex = address.IndexOf(':');
+            if (sindex > 0)
+            {
+                int slaveId;
+                if (int.TryParse(address.Substring(0, sindex), out slaveId))
+                    dv.Area = slaveId;
+                address = address.Substring(sindex + 1);
+            }
+            switch (address[0])
+            {
+                case '0':
+                    {
+                        dv.DBNumber = Modbus.fctReadCoil;
+                        int st;
+                        int.TryParse(address, out st);
+                        dv.Bit = (byte)(st % 16);
+                        st /= 16;
+                        dv.Start = st;
+                        dv.Bit--;
+                    }
+                    break;
+                case '1':
+                    {
+                        dv.DBNumber = Modbus.fctReadDiscreteInputs;
+                        int st;
+                        int.TryParse(address.Substring(1), out st);
+                        dv.Bit = (byte)(st % 16);
+                        st /= 16;
+                        dv.Start = st;
+                        dv.Bit--;
+                    }
+                    break;
+                case '4':
+                    {
+                        int index = address.IndexOf('.');
+                        dv.DBNumber = Modbus.fctReadHoldingRegister;
+                        if (index > 0)
+                        {
+                            dv.Start = int.Parse(address.Substring(1, index - 1));
+                            dv.Bit = byte.Parse(address.Substring(index + 1));
+                        }
+                        else
+                            dv.Start = int.Parse(address.Substring(1));
+                        dv.Start--;
+                        dv.Bit--;
+                        dv.ByteOrder = ByteOrder.BigEndian;
+                    }
+                    break;
+                case '3':
+                    {
+                        int index = address.IndexOf('.');
+                        dv.DBNumber = Modbus.fctReadInputRegister;
+                        if (index > 0)
+                        {
+                            dv.Start = int.Parse(address.Substring(1, index - 1));
+                            dv.Bit = byte.Parse(address.Substring(index + 1));
+                        }
+                        else
+                            dv.Start = int.Parse(address.Substring(1));
+                        dv.Start--;
+                        dv.Bit--;
+                        dv.ByteOrder = ByteOrder.BigEndian;
+                    }
+                    break;
+            }
+            return dv;
+        }
+
+        public string GetAddress(DeviceAddress address)
+        {
+            return string.Empty;
+        }
+        #endregion
+
+        #region :IReaderWriter 
+        object _async = new object();
         public byte[] ReadBytes(DeviceAddress address, ushort size)
         {
-            int area = address.Area;
+            var func = (byte)address.DBNumber;
             try
             {
-                byte[] header = area == Modbus.fctReadCoil ? CreateReadHeader(address.Start * 16, (ushort)(16 * size), (byte)area) :
-                 CreateReadHeader(address.Start, size, (byte)area);
-                _serialPort.Write(header, 0, header.Length);
-                byte[] frameBytes = new byte[size * 2 + 5];
-                byte[] data = new byte[size * 2];
-                int numBytesRead = 0;
-                while (numBytesRead != size)
-                    numBytesRead += _serialPort.Read(frameBytes, numBytesRead, size - numBytesRead);
-                if (frameBytes[0] == (byte)_id && Utility.CheckSumCRC(frameBytes))
+                byte[] header = func < 3 ? CreateReadHeader(address.Area, address.Start * 16, (ushort)(16 * size), func) :
+                 CreateReadHeader(address.Area, address.Start, size, func);
+                lock (_async)
                 {
-                    Array.Copy(frameBytes, 3, data, 0, size);
-                    return data;
+                    byte[] frameBytes = new byte[size * 2 + 5];//size * 2 +
+                    byte[] data = new byte[size * 2];
+                    _serialPort.Write(header, 0, header.Length);
+                    int numBytesRead = 0;
+                    while (numBytesRead < 2)
+                        numBytesRead += _serialPort.Read(frameBytes, numBytesRead, 2 - numBytesRead);
+                    if (frameBytes[1] == address.DBNumber)
+                    {
+                        while (numBytesRead < frameBytes.Length)
+                            numBytesRead += _serialPort.Read(frameBytes, numBytesRead, frameBytes.Length - numBytesRead);
+                        if (Utility.CheckSumCRC(frameBytes))
+                        {
+                            Array.Copy(frameBytes, 3, data, 0, data.Length);
+                            Thread.Sleep(20);
+                            return data;
+                        }
+                        else Thread.Sleep(10);
+                    }
+                    else
+                    {
+                        numBytesRead = 0;
+                        while (numBytesRead < 3)
+                            numBytesRead += _serialPort.Read(frameBytes, numBytesRead, 3 - numBytesRead);
+                        Thread.Sleep(10);
+                    }
+
                 }
                 return null;
             }
             catch (Exception e)
             {
-                if (OnClose != null)
-                    OnClose(this, new ShutdownRequestEventArgs(e.Message));
+                if (OnError != null)
+                    OnError(this, new IOErrorEventArgs(e.Message));
                 return null;
             }
         }
@@ -312,6 +520,20 @@ namespace ModbusDriver
             byte[] bit = ReadBytes(address, 2);
             return bit == null ? new ItemData<int>(0, 0, QUALITIES.QUALITY_BAD) :
                 new ItemData<int>(BitConverter.ToInt32(bit, 0), 0, QUALITIES.QUALITY_GOOD);
+        }
+
+        public ItemData<uint> ReadUInt32(DeviceAddress address)
+        {
+            byte[] bit = ReadBytes(address, 2);
+            return bit == null ? new ItemData<uint>(0, 0, QUALITIES.QUALITY_BAD) :
+                new ItemData<uint>(BitConverter.ToUInt32(bit, 0), 0, QUALITIES.QUALITY_GOOD);
+        }
+
+        public ItemData<ushort> ReadUInt16(DeviceAddress address)
+        {
+            byte[] bit = ReadBytes(address, 1);
+            return bit == null ? new ItemData<ushort>(0, 0, QUALITIES.QUALITY_BAD) :
+                new ItemData<ushort>(BitConverter.ToUInt16(bit, 0), 0, QUALITIES.QUALITY_GOOD);
         }
 
         public ItemData<short> ReadInt16(DeviceAddress address)
@@ -356,64 +578,47 @@ namespace ModbusDriver
 
         public int WriteBytes(DeviceAddress address, byte[] bit)
         {
-            var data = WriteMultipleRegister(address.Start, bit);
-            _serialPort.Write(data, 0, data.Length);
-            _serialPort.ReadByte();
-            var chr = _serialPort.ReadByte();
-            return (chr & 0x80) > 0 ? -1 : 0;
+            return WriteMultipleRegister(address.Area, address.Start, bit);
         }
 
         public int WriteBit(DeviceAddress address, bool bit)
         {
-            var data = WriteSingleCoils(address.Start + address.Bit, bit);
-            _serialPort.Write(data, 0, data.Length);
-            _serialPort.ReadByte();
-            var chr = _serialPort.ReadByte();
-            return (chr & 0x80) > 0 ? -1 : 0;
+            return WriteSingleCoils(address.Area, address.Start + address.Bit, bit);
         }
 
         public int WriteBits(DeviceAddress address, byte bits)
         {
-            var data = WriteSingleRegister(address.Start, new byte[] { bits });
-            _serialPort.Write(data, 0, data.Length);
-            _serialPort.ReadByte();
-            var chr = _serialPort.ReadByte();
-            return (chr & 0x80) > 0 ? -1 : 0;
+            return WriteSingleRegister(address.Area, address.Start, new byte[] { bits });
         }
 
         public int WriteInt16(DeviceAddress address, short value)
         {
-            var data = WriteSingleRegister(address.Start, BitConverter.GetBytes(value));
-            _serialPort.Write(data, 0, data.Length);
-            var chr = _serialPort.ReadByte();
-            return (chr & 0x80) > 0 ? -1 : 0;
+            return WriteSingleRegister(address.Area, address.Start, BitConverter.GetBytes(value));
+        }
+
+        public int WriteUInt16(DeviceAddress address, ushort value)
+        {
+            return WriteSingleRegister(address.Area, address.Start, BitConverter.GetBytes(value));
+        }
+
+        public int WriteUInt32(DeviceAddress address, uint value)
+        {
+            return WriteMultipleRegister(address.Area, address.Start, BitConverter.GetBytes(value));
         }
 
         public int WriteInt32(DeviceAddress address, int value)
         {
-            var data = WriteMultipleRegister(address.Start, BitConverter.GetBytes(value));
-            _serialPort.Write(data, 0, data.Length);
-            _serialPort.ReadByte();
-            var chr = _serialPort.ReadByte();
-            return (chr & 0x80) > 0 ? -1 : 0;
+            return WriteMultipleRegister(address.Area, address.Start, BitConverter.GetBytes(value));
         }
 
         public int WriteFloat(DeviceAddress address, float value)
         {
-            var data = WriteMultipleRegister(address.Start, BitConverter.GetBytes(value));
-            _serialPort.Write(data, 0, data.Length);
-            _serialPort.ReadByte();
-            var chr = _serialPort.ReadByte();
-            return (chr & 0x80) > 0 ? -1 : 0;
+            return WriteMultipleRegister(address.Area, address.Start, BitConverter.GetBytes(value));
         }
 
         public int WriteString(DeviceAddress address, string str)
         {
-            var data = WriteMultipleRegister(address.Start, Encoding.ASCII.GetBytes(str));
-            _serialPort.Write(data, 0, data.Length);
-            _serialPort.ReadByte();
-            var chr = _serialPort.ReadByte();
-            return chr == (byte)_id ? -1 : 0;
+            return WriteMultipleRegister(address.Area, address.Start, Encoding.ASCII.GetBytes(str));
         }
 
         public int WriteValue(DeviceAddress address, object value)
@@ -421,106 +626,21 @@ namespace ModbusDriver
             return this.WriteValueEx(address, value);
         }
 
-        public event ShutdownRequestEventHandler OnClose;
-    }
+        #endregion
 
-    public sealed class ModbusRtuGroup : PLCGroup
-    {
-        public ModbusRtuGroup(short id, string name, int updateRate, bool active, ModbusRTUReader plcReader)
-        {
-            this._id = id;
-            this._name = name;
-            this._updateRate = updateRate;
-            this._isActive = active;
-            this._plcReader = plcReader;
-            this._server = _plcReader.Parent;
-            this._timer = new Timer();
-            this._changedList = new List<int>();
-            this._cacheReader = new ShortCacheReader();
-        }
+        #region : IDisposable
 
-        protected override unsafe int Poll()
+        public void Dispose()
         {
-            short[] cache = (short[])_cacheReader.Cache;
-            int k = 0;
-            foreach (PDUArea area in _rangeList)
+            foreach (IGroup grp in _grps)
             {
-                byte[] rcvBytes = _plcReader.ReadBytes(area.Start, (ushort)area.Len);//从PLC读取数据  
-                if (rcvBytes == null)
-                {
-                    _plcReader.Connect();
-                    return -1;
-                }
-                else
-                {
-                    int len = rcvBytes.Length / 2;
-                    fixed (byte* p1 = rcvBytes)
-                    {
-                        short* prcv = (short*)p1;
-                        int index = area.StartIndex;//index指向_items中的Tag元数据
-                        int count = index + area.Count;
-                        while (index < count)
-                        {
-                            DeviceAddress addr = _items[index].Address;
-                            int iShort = addr.CacheIndex;
-                            int iShort1 = iShort - k;
-                            if (addr.VarType == DataType.BOOL)
-                            {
-                                int tmp = prcv[iShort1] ^ cache[iShort];
-                                DeviceAddress next = addr;
-                                if (tmp != 0)
-                                {
-                                    while (addr.Start == next.Start)
-                                    {
-                                        if ((tmp & (1 << next.Bit)) > 0) _changedList.Add(index);
-                                        if (++index < count)
-                                            next = _items[index].Address;
-                                        else
-                                            break;
-                                    }
-                                }
-                                else
-                                {
-                                    while (addr.Start == next.Start && ++index < count)
-                                    {
-                                        next = _items[index].Address;
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                if (addr.DataSize <= 2)
-                                {
-                                    if (prcv[iShort1] != cache[iShort]) _changedList.Add(index);
-                                }
-                                else
-                                {
-                                    int size = addr.DataSize / 2;
-                                    for (int i = 0; i < size; i++)
-                                    {
-                                        if (prcv[iShort1 + i] != cache[iShort + i])
-                                        {
-                                            _changedList.Add(index);
-                                            break;
-                                        }
-                                    }
-                                }
-                                index++;
-                            }
-                        }
-                        for (int j = 0; j < len; j++)
-                        {
-                            cache[j + k] = prcv[j];
-                        }//将PLC读取的数据写入到CacheReader中
-                    }
-                    k += len;
-                }
+                grp.Dispose();
             }
-            return 1;
+            _grps.Clear();
+            _serialPort.Close();
         }
-
+        #endregion
     }
-
 
     public sealed class Modbus
     {
@@ -558,6 +678,37 @@ namespace ModbusDriver
         public const byte excExceptionOffset = 128;
         /// <summary>Constant for exception send failt.</summary>
         public const byte excSendFailt = 100;
-    }
 
+        public static string GetErrorString(byte exception)
+        {
+            switch (exception)
+            {
+                case Modbus.excIllegalFunction:
+                    return "Constant for ModbusModbus.exception illegal function.";
+                case Modbus.excIllegalDataAdr:
+                    return "Constant for ModbusModbus.exception illegal data address.";
+                case Modbus.excIllegalDataVal:
+                    return "Constant for ModbusModbus.exception illegal data value.";
+                case Modbus.excSlaveDeviceFailure:
+                    return "Constant for ModbusModbus.exception slave device failure.";
+                case Modbus.excAck:
+                    return "Constant for ModbusModbus.exception acknowledge.";
+                case Modbus.excSlaveIsBusy:
+                    return "Constant for ModbusModbus.exception slave is busy/booting up.";
+                case Modbus.excGatePathUnavailable:
+                    return "Constant for ModbusModbus.exception gate path unavailable.";
+                case Modbus.excExceptionNotConnected:
+                    return "Constant for ModbusModbus.exception not connected.";
+                case Modbus.excExceptionConnectionLost:
+                    return "Constant for ModbusModbus.exception connection lost.";
+                case Modbus.excExceptionTimeout:
+                    return "Constant for ModbusModbus.exception response timeout.";
+                case Modbus.excExceptionOffset:
+                    return "Constant for ModbusModbus.exception wrong offset.";
+                case Modbus.excSendFailt:
+                    return "Constant for ModbusModbus.exception send failt.";
+            }
+            return string.Empty;
+        }
+    }
 }
